@@ -1,36 +1,112 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Health Maxxing
 
-## Getting Started
+A personal health and weight-loss tracker. It ingests Apple Health data
+exported by the [Health Auto Export](https://www.healthyapps.dev/) app, lets
+you manually log weight and food, and shows trends against a weight goal.
 
-First, run the development server:
+## Features
+
+| Route | What it does |
+|---|---|
+| `/` | Today's steps, active/basal energy, sleep, resting HR, calories in vs. out, and progress toward your weight goal |
+| `/trends` | Weight vs. goal, calories in vs. out, steps, sleep, resting heart rate, and HRV over 7/30/90 days |
+| `/log` | Manual weight and food entries, with delete |
+| `/goals` | Starting/target weight, target date, daily calorie target, with a sustainable-pace check (flags if the implied kg/week is aggressive) |
+| `/workouts` | Imported workouts list + per-workout detail (duration, distance, energy, heart rate) |
+| `POST /api/ingest` | Where Health Auto Export's REST API automation posts to, protected by a bearer-token secret (`INGEST_SECRET`) |
+
+**Data model** (`db/schema.sql`): `health_metric_samples` (every Apple Health
+metric, generic name/unit/qty/min/avg/max + raw JSON payload),
+`workouts`, `weight_logs`, `food_logs`, and a single-row `goals` table.
+
+**Stack**: Next.js 16 (App Router, Turbopack), React 19, Tailwind v4,
+Recharts, Postgres via the plain `postgres` driver (works against local
+Docker or any hosted Postgres - no ORM, no Neon-specific lock-in).
+
+Data lives in Postgres. There's no login on the dashboard itself - treat the
+deployment URL as private, and change `INGEST_SECRET` if it ever leaks.
+
+## Local setup
+
+1. Start a local Postgres (or point at a hosted one - see below):
+   ```bash
+   docker run -d --name health-maxxing-db -e POSTGRES_PASSWORD=devpassword \
+     -e POSTGRES_DB=healthmaxxing -p 55432:5432 postgres:16-alpine
+   ```
+2. Copy `.env.example` to `.env.local` and fill in `DATABASE_URL` (matching
+   the container above) and `INGEST_SECRET` (`openssl rand -base64 32`).
+3. Install dependencies and create the schema:
+   ```bash
+   npm install
+   npm run db:migrate
+   ```
+4. Run the app:
+   ```bash
+   npm run dev
+   ```
+
+### Importing historical data
+
+The `data/` folder (gitignored - never commit real health exports) is where
+you'd drop a manual Health Auto Export JSON file. Import it directly into the
+database, bypassing the API route entirely:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run db:import -- data/your-export.json
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+This is idempotent - re-importing the same file updates existing rows instead
+of duplicating them, so it's safe to re-run after a fresh full export.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploying
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Database**: create a hosted Postgres (e.g. a free [Neon](https://neon.tech)
+   project) and copy its connection string.
+2. **Schema**: run the migration once against that connection string:
+   ```bash
+   DATABASE_URL="<your-prod-connection-string>" npm run db:migrate
+   ```
+3. **Backfill**: import your historical export the same way:
+   ```bash
+   DATABASE_URL="<your-prod-connection-string>" npm run db:import -- data/your-export.json
+   ```
+   Do this locally, not through `/api/ingest` - hosts like Vercel cap
+   serverless function request bodies at 4.5 MB, and a multi-month export is
+   much larger than that.
+4. **App**: deploy to Vercel (or any Next.js host) and set the `DATABASE_URL`
+   and `INGEST_SECRET` environment variables there to the same values.
 
-## Learn More
+### Configuring automated sync
 
-To learn more about Next.js, take a look at the following resources:
+In Health Auto Export: **Automations -> new REST API automation**.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **URL**: `https://<your-deployment>/api/ingest`
+- **Method**: POST, **Format**: JSON
+- **Headers**: `Authorization: Bearer <your INGEST_SECRET>`
+- **Batch Requests**: ON - keeps each request small and under the 4.5 MB
+  serverless body limit
+- **Date range**: "Since Last Sync" - sends only new data on each run
+- Schedule it however often you'd like (e.g. daily)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Current status
 
-## Deploy on Vercel
+Built and verified locally (real import of a 1-month export: 625 metric
+samples, 5 workouts; all routes, forms, and the ingest endpoint exercised
+end-to-end). **Not yet deployed** - it's only ever been run against a local
+Docker Postgres, so nothing is reachable from your phone yet, and no weight
+or food has been logged for real.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Notes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- "Today" boundaries (for stats like "steps today") are computed against a
+  fixed timezone, `TIME_ZONE` in `lib/time.ts` (defaults to
+  `America/Los_Angeles`, matching the sample export). Change it if you're
+  somewhere else - this matters because deployed hosts run their server
+  clock in UTC.
+- Weight and food logging are manual; the sample Health Auto Export data
+  didn't include body weight or nutrition metrics. If a future export
+  includes a body-weight metric, it lands in `health_metric_samples`
+  alongside everything else rather than merging into `weight_logs`.
+- No authentication on the dashboard - anyone with the URL can view and log
+  data. Fine for a private/unlisted deployment; worth revisiting before
+  sharing the link with anyone.
