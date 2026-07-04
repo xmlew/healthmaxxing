@@ -45,6 +45,15 @@ export function WorkoutIcon({ className }: IconProps) {
   );
 }
 
+export function TdeeIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M12 3c1.5 3 4.5 4.5 4.5 8.5A4.5 4.5 0 0 1 12 16a4.5 4.5 0 0 1-4.5-4.5C7.5 9 9 7 12 3Z" />
+      <path d="M12 21a3 3 0 0 0 3-3c0-1.8-1.5-2.5-3-4.5-1.5 2-3 2.7-3 4.5a3 3 0 0 0 3 3Z" />
+    </svg>
+  );
+}
+
 export function GoalIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className}>
