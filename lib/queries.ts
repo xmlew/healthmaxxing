@@ -141,11 +141,13 @@ export async function getRecentFoodLogs(limit: number) {
 }
 
 export async function deleteWeightLog(id: string) {
-  await sql`delete from weight_logs where id = ${id}`;
+  const rows = await sql`delete from weight_logs where id = ${id} returning id`;
+  return rows.length > 0;
 }
 
 export async function deleteFoodLog(id: string) {
-  await sql`delete from food_logs where id = ${id}`;
+  const rows = await sql`delete from food_logs where id = ${id} returning id`;
+  return rows.length > 0;
 }
 
 export async function getFoodDailyTotals(days: number) {
