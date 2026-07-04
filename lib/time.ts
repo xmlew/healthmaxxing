@@ -8,3 +8,14 @@ export const KJ_PER_KCAL = 4.184;
 export function kjToKcal(kj: number): number {
   return kj / KJ_PER_KCAL;
 }
+
+const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function dayKeyInZone(date: Date): string {
+  return dayKeyFormatter.format(date);
+}
