@@ -1,0 +1,451 @@
+import { createMcpHandler, withMcpAuth } from "mcp-handler";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { z } from "zod";
+import {
+  addFoodLog,
+  addWeightLog,
+  deleteFoodLog,
+  deleteWeightLog,
+  getEnergyOutDailyTotals,
+  getFoodDailyTotals,
+  getGoal,
+  getLatestMetric,
+  getLatestWeight,
+  getMetricSeries,
+  getRecentFoodLogs,
+  getRecentWeightLogs,
+  getRecentWorkouts,
+  getTodayFoodTotal,
+  getTodayMetricSum,
+  getWeightSeries,
+  getWorkoutById,
+  upsertGoal,
+} from "@/lib/queries";
+import { kjToKcal, TIME_ZONE } from "@/lib/time";
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const numOrNull = (v: unknown) => (v == null ? null : Number(v));
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
+// goals.starting_date / target_date are `date` columns; mirror the dashboard's
+// own normalization (app/goals/page.tsx toDateInputValue) to a YYYY-MM-DD string.
+const dateStr = (v: unknown): string | null =>
+  v == null ? null : new Date(v as string).toISOString().slice(0, 10);
+
+function ok(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function fail(message: string) {
+  return { content: [{ type: "text" as const, text: message }], isError: true as const };
+}
+
+// date omitted -> now; an unparseable string is a hard error rather than a
+// silent fallback to "now", which would log data against the wrong day.
+function resolveLoggedAt(date?: string): { iso: string } | { error: string } {
+  if (date === undefined) return { iso: new Date().toISOString() };
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) {
+    return { error: `Invalid date: "${date}". Provide an ISO date or datetime string.` };
+  }
+  return { iso: d.toISOString() };
+}
+
+const TREND_METRICS = {
+  steps: { name: "step_count", unit: "steps" },
+  sleep: { name: "sleep_analysis", unit: "hr" },
+  hrv: { name: "heart_rate_variability", unit: "ms" },
+  resting_hr: { name: "resting_heart_rate", unit: "bpm" },
+} as const;
+
+const handler = createMcpHandler(
+  (server) => {
+    server.registerTool(
+      "get_today_summary",
+      {
+        title: "Today's summary",
+        description:
+          "Today's health snapshot (dashboard home): steps, distance, sleep, resting heart rate, calories in vs. out, current weight, and goal progress. 'Today' is the America/Los_Angeles calendar day. Energy is in kcal.",
+      },
+      async () => {
+        const [steps, activeKj, basalKj, distanceKm, restingHr, sleep, food, weight, goal] =
+          await Promise.all([
+            getTodayMetricSum("step_count"),
+            getTodayMetricSum("active_energy"),
+            getTodayMetricSum("basal_energy_burned"),
+            getTodayMetricSum("walking_running_distance"),
+            getLatestMetric("resting_heart_rate"),
+            getLatestMetric("sleep_analysis"),
+            getTodayFoodTotal(),
+            getLatestWeight(),
+            getGoal(),
+          ]);
+
+        const caloriesOut = kjToKcal(activeKj + basalKj);
+        const caloriesIn = food.calories;
+        const weightKg = weight ? Number(weight.weight_kg) : null;
+        const startWeight = goal?.starting_weight_kg != null ? Number(goal.starting_weight_kg) : null;
+        const targetWeight = goal?.target_weight_kg != null ? Number(goal.target_weight_kg) : null;
+        const progress =
+          weightKg != null && startWeight != null && targetWeight != null && startWeight !== targetWeight
+            ? clamp01((startWeight - weightKg) / (startWeight - targetWeight))
+            : null;
+
+        return ok({
+          timeZone: TIME_ZONE,
+          steps: Math.round(steps),
+          distanceKm: round1(distanceKm),
+          sleepHours: sleep?.qty != null ? round1(Number(sleep.qty)) : null,
+          restingHeartRate: restingHr?.qty != null ? Math.round(Number(restingHr.qty)) : null,
+          caloriesIn: Math.round(caloriesIn),
+          caloriesOut: Math.round(caloriesOut),
+          calorieBalance: Math.round(caloriesIn - caloriesOut),
+          weightKg,
+          targetWeightKg: targetWeight,
+          goalProgressPct: progress != null ? Math.round(progress * 100) : null,
+        });
+      }
+    );
+
+    server.registerTool(
+      "get_trends",
+      {
+        title: "Metric trends",
+        description:
+          "Daily/sample time series for a metric over N days, for charting or trend analysis. Metrics: steps, sleep, hrv, resting_hr, weight, calories. 'calories' returns in-vs-out per day (kcal). 'weight' includes the goal target for context.",
+        inputSchema: {
+          metric: z.enum(["steps", "sleep", "hrv", "resting_hr", "weight", "calories"]),
+          days: z.number().int().positive().max(365).default(30),
+        },
+      },
+      async ({ metric, days }) => {
+        if (metric === "weight") {
+          const [series, goal] = await Promise.all([getWeightSeries(days), getGoal()]);
+          return ok({
+            metric,
+            days,
+            unit: "kg",
+            targetWeightKg: goal?.target_weight_kg != null ? Number(goal.target_weight_kg) : null,
+            series: series.map((w) => ({ date: w.date.toISOString(), value: round1(w.weightKg) })),
+          });
+        }
+
+        if (metric === "calories") {
+          const [food, energy] = await Promise.all([
+            getFoodDailyTotals(days),
+            getEnergyOutDailyTotals(days),
+          ]);
+          const byDay = new Map<string, { in: number; out: number }>();
+          for (const f of food) {
+            const key = f.date.toISOString().slice(0, 10);
+            byDay.set(key, { in: f.calories, out: byDay.get(key)?.out ?? 0 });
+          }
+          for (const e of energy) {
+            const key = e.date.toISOString().slice(0, 10);
+            byDay.set(key, { in: byDay.get(key)?.in ?? 0, out: kjToKcal(e.kj) });
+          }
+          const series = Array.from(byDay.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, v]) => ({ date, caloriesIn: Math.round(v.in), caloriesOut: Math.round(v.out) }));
+          return ok({ metric, days, unit: "kcal", series });
+        }
+
+        const { name, unit } = TREND_METRICS[metric];
+        const series = await getMetricSeries(name, days);
+        return ok({
+          metric,
+          days,
+          unit,
+          series: series.map((s) => ({ date: s.date.toISOString(), value: round1(s.qty) })),
+        });
+      }
+    );
+
+    server.registerTool(
+      "get_goal_status",
+      {
+        title: "Goal status",
+        description:
+          "Current weight goal with progress toward it (using the latest logged weight) and a sustainable-pace check that flags implied loss faster than the recommended 0.5-1 kg/week.",
+      },
+      async () => {
+        const [goal, latestWeight] = await Promise.all([getGoal(), getLatestWeight()]);
+        if (!goal) return ok({ goalSet: false, message: "No goal has been set yet." });
+
+        const startingWeight = goal.starting_weight_kg != null ? Number(goal.starting_weight_kg) : null;
+        const targetWeight = goal.target_weight_kg != null ? Number(goal.target_weight_kg) : null;
+        const latest = latestWeight ? Number(latestWeight.weight_kg) : null;
+        const progress =
+          latest != null && startingWeight != null && targetWeight != null && startingWeight !== targetWeight
+            ? clamp01((startingWeight - latest) / (startingWeight - targetWeight))
+            : null;
+
+        // Pace check mirrors app/goals/page.tsx:20-35.
+        let kgPerWeek: number | null = null;
+        let paceNote: string | null = null;
+        if (startingWeight != null && targetWeight != null && goal.target_date && goal.starting_date) {
+          const weeks = Math.max(
+            1 / 7,
+            (new Date(goal.target_date).getTime() - new Date(goal.starting_date).getTime()) /
+              (1000 * 60 * 60 * 24 * 7)
+          );
+          kgPerWeek = (startingWeight - targetWeight) / weeks;
+          if (kgPerWeek > 0) {
+            paceNote =
+              kgPerWeek > 1
+                ? `About ${kgPerWeek.toFixed(2)} kg/week - faster than the commonly recommended 0.5-1 kg/week pace.`
+                : `About ${kgPerWeek.toFixed(2)} kg/week - within a typically sustainable range.`;
+          } else if (kgPerWeek < 0) {
+            paceNote = "Target weight is above your starting weight - this is set up as a gain goal.";
+          }
+        }
+
+        return ok({
+          goalSet: true,
+          startingWeightKg: startingWeight,
+          startingDate: dateStr(goal.starting_date),
+          targetWeightKg: targetWeight,
+          targetDate: dateStr(goal.target_date),
+          dailyCalorieTarget: goal.daily_calorie_target != null ? Number(goal.daily_calorie_target) : null,
+          latestWeightKg: latest,
+          progressPct: progress != null ? Math.round(progress * 100) : null,
+          kgPerWeek: kgPerWeek != null ? round2(kgPerWeek) : null,
+          paceNote,
+        });
+      }
+    );
+
+    server.registerTool(
+      "list_workouts",
+      {
+        title: "List workouts",
+        description:
+          "Recent workouts, most recent first. Optional `type` filters by workout name (case-insensitive substring, e.g. 'run', 'walk'). Energy is in kcal.",
+        inputSchema: {
+          limit: z.number().int().positive().max(200).default(60),
+          type: z.string().optional(),
+        },
+      },
+      async ({ limit, type }) => {
+        const rows = await getRecentWorkouts(limit);
+        const filtered = type
+          ? rows.filter((w) => String(w.name ?? "").toLowerCase().includes(type.toLowerCase()))
+          : rows;
+        return ok(
+          filtered.map((w) => ({
+            id: w.id,
+            name: w.name,
+            location: w.location,
+            startTime: w.start_time,
+            endTime: w.end_time,
+            durationMin: numOrNull(w.duration_min),
+            distanceKm: numOrNull(w.distance_km),
+            energyKcal: w.active_energy_kj != null ? Math.round(kjToKcal(Number(w.active_energy_kj))) : null,
+            avgHeartRate: numOrNull(w.avg_heart_rate),
+            maxHeartRate: numOrNull(w.max_heart_rate),
+          }))
+        );
+      }
+    );
+
+    server.registerTool(
+      "get_workout_detail",
+      {
+        title: "Workout detail",
+        description:
+          "Full detail for one workout by id (from list_workouts): duration, distance, active/basal energy in kcal, heart rate, steps, indoor flag. The raw import payload is omitted.",
+        inputSchema: { id: z.string() },
+      },
+      async ({ id }) => {
+        const w = await getWorkoutById(id);
+        if (!w) return fail(`No workout found with id ${id}.`);
+        return ok({
+          id: w.id,
+          name: w.name,
+          location: w.location,
+          isIndoor: w.is_indoor,
+          startTime: w.start_time,
+          endTime: w.end_time,
+          durationMin: numOrNull(w.duration_min),
+          distanceKm: numOrNull(w.distance_km),
+          activeEnergyKcal: w.active_energy_kj != null ? Math.round(kjToKcal(Number(w.active_energy_kj))) : null,
+          basalEnergyKcal: w.basal_energy_kj != null ? Math.round(kjToKcal(Number(w.basal_energy_kj))) : null,
+          avgHeartRate: numOrNull(w.avg_heart_rate),
+          maxHeartRate: numOrNull(w.max_heart_rate),
+          stepCount: numOrNull(w.step_count),
+        });
+      }
+    );
+
+    server.registerTool(
+      "get_recent_logs",
+      {
+        title: "Recent manual logs",
+        description:
+          "Recent manual weight or food entries, most recent first. Returns each entry's id, which is required to delete it.",
+        inputSchema: {
+          kind: z.enum(["weight", "food"]),
+          limit: z.number().int().positive().max(100).default(8),
+        },
+      },
+      async ({ kind, limit }) => {
+        if (kind === "weight") {
+          const rows = await getRecentWeightLogs(limit);
+          return ok(
+            rows.map((r) => ({
+              id: String(r.id),
+              loggedAt: r.logged_at,
+              weightKg: numOrNull(r.weight_kg),
+              bodyFatPct: numOrNull(r.body_fat_pct),
+              note: r.note,
+            }))
+          );
+        }
+        const rows = await getRecentFoodLogs(limit);
+        return ok(
+          rows.map((r) => ({
+            id: String(r.id),
+            loggedAt: r.logged_at,
+            description: r.description,
+            calories: numOrNull(r.calories),
+            meal: r.meal,
+          }))
+        );
+      }
+    );
+
+    server.registerTool(
+      "log_weight",
+      {
+        title: "Log weight",
+        description:
+          "Record a manual weight entry (kg). `date` (ISO string) defaults to now. Re-logging the same timestamp updates that entry.",
+        inputSchema: {
+          kg: z.number().finite().positive().max(500),
+          date: z.string().optional(),
+        },
+      },
+      async ({ kg, date }) => {
+        const at = resolveLoggedAt(date);
+        if ("error" in at) return fail(at.error);
+        await addWeightLog({ loggedAt: at.iso, weightKg: kg, bodyFatPct: null, note: null });
+        return ok({ ok: true, loggedAt: at.iso, weightKg: kg });
+      }
+    );
+
+    server.registerTool(
+      "log_food",
+      {
+        title: "Log food",
+        description:
+          "Record a manual food entry. `calories` required; `protein_g`, `carbs_g`, `fat_g`, `meal` optional. `date` (ISO string) defaults to now.",
+        inputSchema: {
+          description: z.string().min(1),
+          calories: z.number().finite().nonnegative(),
+          date: z.string().optional(),
+          protein_g: z.number().finite().nonnegative().optional(),
+          carbs_g: z.number().finite().nonnegative().optional(),
+          fat_g: z.number().finite().nonnegative().optional(),
+          meal: z.string().optional(),
+        },
+      },
+      async ({ description, calories, date, protein_g, carbs_g, fat_g, meal }) => {
+        const at = resolveLoggedAt(date);
+        if ("error" in at) return fail(at.error);
+        await addFoodLog({
+          loggedAt: at.iso,
+          description: description.trim(),
+          calories,
+          proteinG: protein_g ?? null,
+          carbsG: carbs_g ?? null,
+          fatG: fat_g ?? null,
+          meal: meal ?? null,
+        });
+        return ok({ ok: true, loggedAt: at.iso, description: description.trim(), calories });
+      }
+    );
+
+    server.registerTool(
+      "set_goal",
+      {
+        title: "Set goal",
+        description:
+          "Update the weight goal. Only the fields you provide change; omitted fields keep their current values. Dates are YYYY-MM-DD.",
+        inputSchema: {
+          startingWeightKg: z.number().finite().positive().optional(),
+          startingDate: z.string().optional(),
+          targetWeightKg: z.number().finite().positive().optional(),
+          targetDate: z.string().optional(),
+          dailyCalorieTarget: z.number().finite().nonnegative().optional(),
+        },
+      },
+      async (input) => {
+        for (const [key, value] of [
+          ["startingDate", input.startingDate],
+          ["targetDate", input.targetDate],
+        ] as const) {
+          if (value !== undefined && Number.isNaN(new Date(value).getTime())) {
+            return fail(`Invalid ${key}: "${value}". Use a YYYY-MM-DD date.`);
+          }
+        }
+
+        // Merge onto the existing single-row goal so a partial update doesn't
+        // null out fields the caller didn't mention (upsertGoal overwrites all).
+        const existing = await getGoal();
+        const merged = {
+          startingWeightKg:
+            input.startingWeightKg ?? (existing?.starting_weight_kg != null ? Number(existing.starting_weight_kg) : null),
+          startingDate: input.startingDate ?? dateStr(existing?.starting_date),
+          targetWeightKg:
+            input.targetWeightKg ?? (existing?.target_weight_kg != null ? Number(existing.target_weight_kg) : null),
+          targetDate: input.targetDate ?? dateStr(existing?.target_date),
+          dailyCalorieTarget:
+            input.dailyCalorieTarget ??
+            (existing?.daily_calorie_target != null ? Number(existing.daily_calorie_target) : null),
+        };
+        await upsertGoal(merged);
+        return ok({ ok: true, goal: merged });
+      }
+    );
+
+    server.registerTool(
+      "delete_weight_log",
+      {
+        title: "Delete weight log",
+        description: "Delete a manual weight entry by id (from get_recent_logs).",
+        inputSchema: { id: z.string() },
+      },
+      async ({ id }) => {
+        const removed = await deleteWeightLog(id);
+        return removed ? ok({ ok: true, deletedId: id }) : fail(`No weight log found with id ${id}.`);
+      }
+    );
+
+    server.registerTool(
+      "delete_food_log",
+      {
+        title: "Delete food log",
+        description: "Delete a manual food entry by id (from get_recent_logs).",
+        inputSchema: { id: z.string() },
+      },
+      async ({ id }) => {
+        const removed = await deleteFoodLog(id);
+        return removed ? ok({ ok: true, deletedId: id }) : fail(`No food log found with id ${id}.`);
+      }
+    );
+  },
+  {},
+  { basePath: "/api" }
+);
+
+// Shared-secret bearer auth, same convention as INGEST_SECRET (app/api/ingest).
+const verifyToken = async (_req: Request, bearerToken?: string): Promise<AuthInfo | undefined> => {
+  const secret = process.env.MCP_SECRET;
+  if (!secret || !bearerToken || bearerToken !== secret) return undefined;
+  return { token: bearerToken, clientId: "health-maxxing", scopes: [] };
+};
+
+const authHandler = withMcpAuth(handler, verifyToken, { required: true });
+
+export { authHandler as GET, authHandler as POST, authHandler as DELETE };
