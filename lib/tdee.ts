@@ -1,8 +1,8 @@
 import {
+  getBasalEnergyDailyTotals,
   getEnergyOutDailyTotals,
   getFoodDailyTotals,
   getGoal,
-  getMetricSeries,
 } from "./queries";
 import { kjToKcal } from "./time";
 
@@ -53,18 +53,19 @@ export async function getTdeeAnalysis(
   const [energyOutDaily, foodDaily, basalDaily, goal] = await Promise.all([
     getEnergyOutDailyTotals(days),
     getFoodDailyTotals(days),
-    getMetricSeries("basal_energy_burned", days),
+    getBasalEnergyDailyTotals(days),
     getGoal(),
   ]);
 
   const intakeByDay = new Map<string, number>();
   for (const f of foodDaily) intakeByDay.set(dayKey(f.date), f.calories);
 
+  // Bucket basal by the same date_trunc-at-TIME_ZONE path as energyOutDaily so
+  // the missing-basal guard shares day boundaries with the TDEE sum. Keying raw
+  // sample timestamps by UTC date instead would disagree by a day for
+  // evening-Pacific samples and wrongly flag those days as missing basal.
   const basalByDay = new Map<string, number>();
-  for (const b of basalDaily) {
-    const key = dayKey(b.date);
-    basalByDay.set(key, (basalByDay.get(key) ?? 0) + b.qty);
-  }
+  for (const b of basalDaily) basalByDay.set(dayKey(b.date), b.kj);
 
   const dayKeys = new Set<string>([...intakeByDay.keys()]);
   for (const e of energyOutDaily) dayKeys.add(dayKey(e.date));

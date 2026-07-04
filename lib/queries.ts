@@ -171,6 +171,18 @@ export async function getEnergyOutDailyTotals(days: number) {
   return rows.map((r) => ({ date: r.day as Date, kj: Number(r.total_kj) }));
 }
 
+export async function getBasalEnergyDailyTotals(days: number) {
+  const rows = await sql`
+    select date_trunc('day', sample_ts at time zone ${TIME_ZONE}) as day, sum(qty) as total_kj
+    from health_metric_samples
+    where metric_name = 'basal_energy_burned'
+      and sample_ts >= now() - (${days} || ' days')::interval
+    group by 1
+    order by 1 asc
+  `;
+  return rows.map((r) => ({ date: r.day as Date, kj: Number(r.total_kj) }));
+}
+
 export async function getRecentWorkouts(limit: number) {
   return sql`
     select id, name, location, start_time, end_time, duration_min, active_energy_kj, distance_km, avg_heart_rate, max_heart_rate
