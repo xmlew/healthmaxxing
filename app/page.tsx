@@ -1,65 +1,126 @@
-import Image from "next/image";
+import Link from "next/link";
+import { StatTile } from "@/components/stat-tile";
+import { kjToKcal } from "@/lib/time";
+import {
+  getGoal,
+  getLatestMetric,
+  getLatestWeight,
+  getTodayFoodTotal,
+  getTodayMetricSum,
+} from "@/lib/queries";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+function fmt(n: number, digits = 0) {
+  return n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+export default async function DashboardPage() {
+  const [steps, activeKj, basalKj, distanceKm, restingHr, sleep, foodToday, weight, goal] =
+    await Promise.all([
+      getTodayMetricSum("step_count"),
+      getTodayMetricSum("active_energy"),
+      getTodayMetricSum("basal_energy_burned"),
+      getTodayMetricSum("walking_running_distance"),
+      getLatestMetric("resting_heart_rate"),
+      getLatestMetric("sleep_analysis"),
+      getTodayFoodTotal(),
+      getLatestWeight(),
+      getGoal(),
+    ]);
+
+  const caloriesOut = kjToKcal(activeKj + basalKj);
+  const caloriesIn = foodToday.calories;
+  const balance = caloriesIn - caloriesOut;
+
+  const weightKg = weight ? Number(weight.weight_kg) : null;
+  const startWeight = goal?.starting_weight_kg ? Number(goal.starting_weight_kg) : null;
+  const targetWeight = goal?.target_weight_kg ? Number(goal.target_weight_kg) : null;
+  const progress =
+    weightKg != null && startWeight != null && targetWeight != null && startWeight !== targetWeight
+      ? Math.min(1, Math.max(0, (startWeight - weightKg) / (startWeight - targetWeight)))
+      : null;
+
+  const today = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="flex flex-col gap-8">
+      <header>
+        <p className="text-sm text-muted">{today}</p>
+        <h1 className="font-display text-3xl tracking-tight md:text-4xl">Today</h1>
+      </header>
+
+      <section className="rise-in rounded-3xl border border-border bg-surface p-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted">Current weight</p>
+            <p className="font-display text-4xl tabular-nums tracking-tight">
+              {weightKg != null ? fmt(weightKg, 1) : "--"}
+              <span className="ml-1 text-lg font-normal text-muted">kg</span>
+            </p>
+          </div>
+          {targetWeight != null ? (
+            <div className="text-right">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted">Goal</p>
+              <p className="font-display text-2xl tabular-nums tracking-tight text-accent">
+                {fmt(targetWeight, 1)}
+                <span className="ml-1 text-sm font-normal text-muted">kg</span>
+              </p>
+            </div>
+          ) : (
+            <Link
+              href="/goals"
+              className="rounded-full border border-border px-4 py-2 text-sm font-medium text-muted transition-colors hover:text-foreground"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              Set a goal
+            </Link>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+        {progress != null ? (
+          <div className="mt-5">
+            <div className="h-2 w-full overflow-hidden rounded-full bg-surface-raised">
+              <div
+                className="h-full rounded-full bg-accent transition-[width] duration-700 ease-out"
+                style={{ width: `${Math.round(progress * 100)}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-muted">{Math.round(progress * 100)}% to goal</p>
+          </div>
+        ) : null}
+      </section>
+
+      <section>
+        <h2 className="mb-1 text-sm font-medium text-muted">Calories</h2>
+        <div className="rounded-3xl border border-border bg-surface p-6">
+          <div className="flex flex-wrap items-baseline justify-between gap-6">
+            <StatTile label="Eaten" value={fmt(caloriesIn)} unit="kcal" />
+            <StatTile label="Burned" value={fmt(caloriesOut)} unit="kcal" />
+            <StatTile
+              label={balance <= 0 ? "Deficit" : "Surplus"}
+              value={fmt(Math.abs(balance))}
+              unit="kcal"
+              caption={balance <= 0 ? "on track" : "over burn"}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </div>
         </div>
-      </main>
+      </section>
+
+      <section className="grid grid-cols-2 gap-x-6 divide-y divide-border rounded-3xl border border-border bg-surface px-6 sm:grid-cols-4 sm:divide-y-0">
+        <StatTile label="Steps" value={fmt(steps)} delay={0} />
+        <StatTile label="Distance" value={fmt(distanceKm, 1)} unit="km" delay={40} />
+        <StatTile
+          label="Sleep"
+          value={sleep ? fmt(Number(sleep.qty), 1) : "--"}
+          unit={sleep ? "hr" : undefined}
+          caption={sleep ? new Date(sleep.sample_ts).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : undefined}
+          delay={80}
+        />
+        <StatTile label="Resting HR" value={restingHr ? fmt(Number(restingHr.qty)) : "--"} unit={restingHr ? "bpm" : undefined} delay={120} />
+      </section>
     </div>
   );
 }
