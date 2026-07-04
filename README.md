@@ -20,21 +20,26 @@ metric, generic name/unit/qty/min/avg/max + raw JSON payload),
 `workouts`, `weight_logs`, `food_logs`, and a single-row `goals` table.
 
 **Stack**: Next.js 16 (App Router, Turbopack), React 19, Tailwind v4,
-Recharts, Postgres via the plain `postgres` driver (works against local
-Docker or any hosted Postgres - no ORM, no Neon-specific lock-in).
+Recharts, Postgres via the plain `postgres` driver (works against any local
+or hosted Postgres - no ORM, no Neon-specific lock-in).
 
 Data lives in Postgres. There's no login on the dashboard itself - treat the
 deployment URL as private, and change `INGEST_SECRET` if it ever leaks.
 
 ## Local setup
 
-1. Start a local Postgres (or point at a hosted one - see below):
+1. Start a local Postgres (or point at a hosted one - see below). With
+   [Homebrew](https://brew.sh):
    ```bash
-   docker run -d --name health-maxxing-db -e POSTGRES_PASSWORD=devpassword \
-     -e POSTGRES_DB=healthmaxxing -p 55432:5432 postgres:16-alpine
+   brew install postgresql@16
+   brew services start postgresql@16
+   createdb healthmaxxing
    ```
-2. Copy `.env.example` to `.env.local` and fill in `DATABASE_URL` (matching
-   the container above) and `INGEST_SECRET` (`openssl rand -base64 32`).
+   Homebrew's Postgres creates a superuser role matching your macOS username
+   with local trust auth, so no password is needed for local development.
+2. Copy `.env.example` to `.env.local` and fill in `DATABASE_URL` (pointing at
+   the database above) and `INGEST_SECRET` (`openssl rand -base64 32`). For the
+   Homebrew setup, `postgresql://localhost:5432/healthmaxxing` is enough.
 3. Install dependencies and create the schema:
    ```bash
    npm install
@@ -93,7 +98,7 @@ In Health Auto Export: **Automations -> new REST API automation**.
 Built and verified locally (real import of a 1-month export: 625 metric
 samples, 5 workouts; all routes, forms, and the ingest endpoint exercised
 end-to-end). **Not yet deployed** - it's only ever been run against a local
-Docker Postgres, so nothing is reachable from your phone yet, and no weight
+Homebrew Postgres, so nothing is reachable from your phone yet, and no weight
 or food has been logged for real.
 
 ## Notes
