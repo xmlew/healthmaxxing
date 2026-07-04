@@ -95,6 +95,12 @@ export function correlate(
 // Day-over-day loss in kg per day, assigned to the later day. Positive means
 // weight went down since the previous logged day (i.e. weight was lost); the
 // per-day divisor normalises gaps between non-consecutive weigh-ins.
+//
+// The emitted date must round-trip through zonedDayKey back to currentDay,
+// because correlate() re-buckets this series by zonedDayKey. TIME_ZONE has a
+// negative UTC offset (America/Los_Angeles, -07:00/-08:00), so anchoring at
+// noon UTC keeps the instant on the same zoned calendar day; midnight UTC would
+// fall into the previous zoned day and shift every rate one day early.
 export function weightLossRateSeries(weights: SeriesPoint[]): SeriesPoint[] {
   const byDay = bucketByDay(weights);
   const days = [...byDay.keys()].sort((a, b) => a.localeCompare(b));
@@ -108,7 +114,7 @@ export function weightLossRateSeries(weights: SeriesPoint[]): SeriesPoint[] {
     );
     if (gapDays <= 0) continue;
     const lossPerDay = (byDay.get(previousDay)! - byDay.get(currentDay)!) / gapDays;
-    rates.push({ date: new Date(`${currentDay}T00:00:00Z`), value: lossPerDay });
+    rates.push({ date: new Date(`${currentDay}T12:00:00Z`), value: lossPerDay });
   }
   return rates;
 }
