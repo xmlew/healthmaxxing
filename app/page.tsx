@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { StatTile } from "@/components/stat-tile";
 import { kjToKcal } from "@/lib/time";
+import { ANOMALY_BASELINE_DAYS, getAnomalies } from "@/lib/anomalies";
 import {
   getGoal,
   getLatestMetric,
@@ -16,7 +17,7 @@ function fmt(n: number, digits = 0) {
 }
 
 export default async function DashboardPage() {
-  const [steps, activeKj, basalKj, distanceKm, restingHr, sleep, foodToday, weight, goal] =
+  const [steps, activeKj, basalKj, distanceKm, restingHr, sleep, foodToday, weight, goal, anomalies] =
     await Promise.all([
       getTodayMetricSum("step_count"),
       getTodayMetricSum("active_energy"),
@@ -27,6 +28,7 @@ export default async function DashboardPage() {
       getTodayFoodTotal(),
       getLatestWeight(),
       getGoal(),
+      getAnomalies(),
     ]);
 
   const caloriesOut = kjToKcal(activeKj + basalKj);
@@ -53,6 +55,40 @@ export default async function DashboardPage() {
         <p className="text-sm text-muted">{today}</p>
         <h1 className="font-display text-3xl tracking-tight md:text-4xl">Today</h1>
       </header>
+
+      {anomalies.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          {anomalies.map((a) => {
+            const deviationPct = Math.round(a.deviationPct * 100);
+            const asOf = a.currentAt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            return (
+              <div
+                key={a.key}
+                className="rise-in flex items-start gap-4 rounded-3xl border border-warn/40 bg-warn/10 p-5"
+              >
+                <span
+                  aria-hidden
+                  className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-warn/20 font-display text-warn"
+                >
+                  !
+                </span>
+                <div className="min-w-0">
+                  <p className="font-medium text-warn">
+                    {a.label} {a.direction === "above" ? "elevated" : "low"}
+                  </p>
+                  <p className="mt-1 text-sm text-foreground">
+                    Now {fmt(a.current)} {a.unit}, {Math.abs(deviationPct)}% {a.direction} your{" "}
+                    {ANOMALY_BASELINE_DAYS}-day baseline of {fmt(a.baselineMean)} {a.unit}.
+                  </p>
+                  <p className="mt-1 text-xs text-muted">
+                    Baseline from {a.baselineSampleCount} readings, as of {asOf}.
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      ) : null}
 
       <section className="rise-in rounded-3xl border border-border bg-surface p-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
