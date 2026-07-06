@@ -30,8 +30,10 @@ import { evaluateAnomalies } from "@/lib/anomalies";
 import { PAIRINGS, type PairingKey } from "@/lib/correlation";
 import {
   addSet,
+  computeOverloadStatus,
   estimate1RM,
   getExerciseHistory,
+  listExercises,
   nextSetNumber,
   oneRepMaxSeries,
   resolveManualSession,
@@ -655,6 +657,49 @@ const handler = createMcpHandler(
         }
         const best = series.reduce((m, p) => Math.max(m, p.oneRepMax), 0);
         return ok({ exercise, days, formula, current: series[series.length - 1].oneRepMax, best, series });
+      }
+    );
+
+    server.registerTool(
+      "get_progressive_overload_status",
+      {
+        title: "Progressive overload status",
+        description:
+          "Whether an exercise is still progressing or has stalled. For each exercise: per-session total volume and best-set volume (heaviest set's weight x reps), sessions since the last best-set-volume PR, and a stall flag (no new best-set PR in 3+ sessions). Omit `exercise` to get every exercise's status plus the list of stalled ones. This is the real muscle-building signal, not just weight going up.",
+        inputSchema: {
+          exercise: z.string().optional(),
+          days: z.number().int().positive().max(365).default(180),
+        },
+      },
+      async ({ exercise, days }) => {
+        if (exercise) {
+          const sets = await getExerciseHistory(exercise, days);
+          if (sets.length === 0) {
+            return ok({ exercise, days, message: "No sets logged for this exercise in range." });
+          }
+          return ok({ days, ...computeOverloadStatus(exercise, sets[0].muscleGroup, sets) });
+        }
+        const exercises = await listExercises();
+        const statuses = (
+          await Promise.all(
+            exercises.map(async (ex) => {
+              const sets = await getExerciseHistory(ex.name, days);
+              return sets.length > 0 ? computeOverloadStatus(ex.name, ex.muscleGroup, sets) : null;
+            }),
+          )
+        ).filter((s): s is NonNullable<typeof s> => s != null);
+        return ok({
+          days,
+          exercises: statuses.map((s) => ({
+            exercise: s.exercise,
+            muscleGroup: s.muscleGroup,
+            latestSessionVolume: s.latestSessionVolume,
+            bestSetVolumeAllTime: s.bestSetVolumeAllTime,
+            sessionsSinceImprovement: s.sessionsSinceImprovement,
+            stalled: s.stalled,
+          })),
+          stalled: statuses.filter((s) => s.stalled).map((s) => s.exercise),
+        });
       }
     );
 
