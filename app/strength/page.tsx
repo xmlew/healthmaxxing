@@ -7,6 +7,7 @@ import {
   oneRepMaxSeries,
   type StrengthSetRow,
 } from "@/lib/strength";
+import { SetForm } from "./set-form";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,11 @@ export default async function StrengthPage() {
           Per-exercise history and estimated 1RM (Epley) over the last {HISTORY_DAYS} days.
         </p>
       </header>
+
+      <div className="rounded-3xl border border-border bg-surface p-6">
+        <h2 className="mb-4 font-display text-xl">Log a set</h2>
+        <SetForm />
+      </div>
 
       {active.length === 0 ? (
         <div className="rounded-3xl border border-border bg-surface p-8 text-center text-sm text-muted">
