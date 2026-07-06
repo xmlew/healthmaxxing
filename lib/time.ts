@@ -16,7 +16,7 @@ const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-export function zonedDayKey(date: Date): string {
+export function dayKeyInZone(date: Date): string {
   return dayKeyFormatter.format(date);
 }
 

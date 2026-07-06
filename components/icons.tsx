@@ -45,6 +45,15 @@ export function WorkoutIcon({ className }: IconProps) {
   );
 }
 
+export function RecoveryIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M20.5 8.5c0-2.2-1.7-4-3.9-4-1.5 0-2.8.8-3.5 2-.7-1.2-2-2-3.5-2-2.2 0-3.9 1.8-3.9 4 0 4.2 5.1 7.9 7.4 9.3 2.3-1.4 7.4-5.1 7.4-9.3Z" />
+      <path d="M3 12.5h3.2l1.6-3 2.4 6 1.6-3H16" />
+    </svg>
+  );
+}
+
 export function CorrelationIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className}>

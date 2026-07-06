@@ -180,6 +180,18 @@ export async function getEnergyOutDailyTotals(days: number) {
   return rows.map((r) => ({ date: r.day as Date, kj: Number(r.total_kj) }));
 }
 
+export async function getBasalEnergyDailyTotals(days: number) {
+  const rows = await sql`
+    select date_trunc('day', sample_ts at time zone ${TIME_ZONE}) as day, sum(qty) as total_kj
+    from health_metric_samples
+    where metric_name = 'basal_energy_burned'
+      and sample_ts >= now() - (${days} || ' days')::interval
+    group by 1
+    order by 1 asc
+  `;
+  return rows.map((r) => ({ date: r.day as Date, kj: Number(r.total_kj) }));
+}
+
 export type PairingCorrelation = CorrelationResult & { pairing: PairingDef };
 
 async function seriesForPairing(
@@ -232,4 +244,31 @@ export async function getRecentWorkouts(limit: number) {
 export async function getWorkoutById(id: string) {
   const rows = await sql`select * from workouts where id = ${id}`;
   return rows[0] ?? null;
+}
+
+export type WorkoutDailyLoad = {
+  day: string;
+  activeEnergyKj: number | null;
+  durationMin: number;
+  workoutCount: number;
+};
+
+export async function getWorkoutDailyLoad(days: number): Promise<WorkoutDailyLoad[]> {
+  const rows = await sql`
+    select
+      to_char(date_trunc('day', start_time at time zone ${TIME_ZONE}), 'YYYY-MM-DD') as day,
+      sum(active_energy_kj) as active_energy_kj,
+      coalesce(sum(duration_min), 0) as duration_min,
+      count(*)::int as workout_count
+    from workouts
+    where start_time >= now() - (${days} || ' days')::interval
+    group by 1
+    order by 1 asc
+  `;
+  return rows.map((r) => ({
+    day: r.day as string,
+    activeEnergyKj: r.active_energy_kj == null ? null : Number(r.active_energy_kj),
+    durationMin: Number(r.duration_min),
+    workoutCount: Number(r.workout_count),
+  }));
 }

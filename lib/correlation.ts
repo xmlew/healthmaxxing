@@ -1,4 +1,4 @@
-import { shiftDayKey, zonedDayKey } from "./time";
+import { dayKeyInZone, shiftDayKey } from "./time";
 
 export type SeriesPoint = { date: Date; value: number };
 
@@ -19,7 +19,7 @@ function bucketByDay(series: SeriesPoint[]): Map<string, number> {
   const groups = new Map<string, number[]>();
   for (const point of series) {
     if (!Number.isFinite(point.value)) continue;
-    const key = zonedDayKey(point.date);
+    const key = dayKeyInZone(point.date);
     const bucket = groups.get(key);
     if (bucket) bucket.push(point.value);
     else groups.set(key, [point.value]);
@@ -96,8 +96,8 @@ export function correlate(
 // weight went down since the previous logged day (i.e. weight was lost); the
 // per-day divisor normalises gaps between non-consecutive weigh-ins.
 //
-// The emitted date must round-trip through zonedDayKey back to currentDay,
-// because correlate() re-buckets this series by zonedDayKey. TIME_ZONE has a
+// The emitted date must round-trip through dayKeyInZone back to currentDay,
+// because correlate() re-buckets this series by dayKeyInZone. TIME_ZONE has a
 // negative UTC offset (America/Los_Angeles, -07:00/-08:00), so anchoring at
 // noon UTC keeps the instant on the same zoned calendar day; midnight UTC would
 // fall into the previous zoned day and shift every rate one day early.
