@@ -1,4 +1,5 @@
 import { getMetricSeries, getWorkoutDailyLoad } from "./queries";
+import { weeklyVolumeByMuscleGroup, type MuscleGroupWeeklyVolume } from "./strength";
 import { dayKeyInZone, kjToKcal } from "./time";
 
 const MS_PER_DAY = 86_400_000;
@@ -6,6 +7,11 @@ const RECENT_WINDOW_FRACTION = 1 / 3;
 const MIN_VALUES_PER_PERIOD = 2;
 const RESTING_HR_RISE_PCT = 3;
 const HRV_DROP_PCT = 5;
+
+// Overreaching: a muscle group whose weekly volume has stayed above its own
+// earlier baseline for at least this many trailing weeks, while HRV is trending
+// down. Needs a baseline week beyond the elevated stretch to compare against.
+const OVERREACH_MIN_WEEKS = 2;
 
 export type RecoveryPoint = {
   date: string;
@@ -28,6 +34,13 @@ export type RecoveryFlag = {
   baselineLoadKcal: number | null;
 };
 
+export type OverreachingSignal = {
+  muscleGroup: string;
+  weeksElevated: number;
+  recentWeeklyVolume: number;
+  baselineWeeklyVolume: number;
+};
+
 export type RecoveryAnalysis = {
   days: number;
   series: RecoveryPoint[];
@@ -35,7 +48,43 @@ export type RecoveryAnalysis = {
   hasHrv: boolean;
   energyAvailable: boolean;
   flag: RecoveryFlag;
+  muscleGroupVolume: MuscleGroupWeeklyVolume[];
+  overreaching: OverreachingSignal[];
 };
+
+// Overreaching needs a downtrending HRV; sustained high volume alone isn't it.
+// For each muscle group, compare the trailing weeks against the average of the
+// weeks before them; flag groups elevated for OVERREACH_MIN_WEEKS+ while HRV falls.
+export function computeOverreaching(
+  volume: MuscleGroupWeeklyVolume[],
+  hrvChangePct: number | null,
+): OverreachingSignal[] {
+  if (hrvChangePct == null || hrvChangePct >= 0) return [];
+
+  const signals: OverreachingSignal[] = [];
+  for (const { muscleGroup, weeks } of volume) {
+    if (weeks.length < OVERREACH_MIN_WEEKS + 1) continue;
+    const baseline = weeks.slice(0, -OVERREACH_MIN_WEEKS);
+    const baselineAvg = baseline.reduce((sum, w) => sum + w.volume, 0) / baseline.length;
+    if (baselineAvg <= 0) continue;
+
+    let weeksElevated = 0;
+    for (let i = weeks.length - 1; i >= 0; i--) {
+      if (weeks[i].volume > baselineAvg) weeksElevated += 1;
+      else break;
+    }
+    if (weeksElevated < OVERREACH_MIN_WEEKS) continue;
+
+    const recent = weeks.slice(-weeksElevated);
+    signals.push({
+      muscleGroup,
+      weeksElevated,
+      recentWeeklyVolume: Math.round(recent.reduce((sum, w) => sum + w.volume, 0) / recent.length),
+      baselineWeeklyVolume: Math.round(baselineAvg),
+    });
+  }
+  return signals;
+}
 
 function averageByDay(series: { date: Date; qty: number }[]): Map<string, number> {
   const buckets = new Map<string, { sum: number; count: number }>();
@@ -64,10 +113,11 @@ function round(value: number, digits = 1): number {
 }
 
 export async function getRecoveryAnalysis(days: number): Promise<RecoveryAnalysis> {
-  const [restingHrRaw, hrvRaw, load] = await Promise.all([
+  const [restingHrRaw, hrvRaw, load, muscleGroupVolume] = await Promise.all([
     getMetricSeries("resting_heart_rate", days),
     getMetricSeries("heart_rate_variability", days),
     getWorkoutDailyLoad(days),
+    weeklyVolumeByMuscleGroup(days),
   ]);
 
   const hrByDay = averageByDay(restingHrRaw);
@@ -89,6 +139,7 @@ export async function getRecoveryAnalysis(days: number): Promise<RecoveryAnalysi
 
   const energyAvailable = series.some((p) => p.loadKcal != null);
   const flag = computeRecoveryFlag(series, days, energyAvailable);
+  const overreaching = computeOverreaching(muscleGroupVolume, flag.hrvChangePct);
 
   return {
     days,
@@ -97,6 +148,8 @@ export async function getRecoveryAnalysis(days: number): Promise<RecoveryAnalysi
     hasHrv: hrvByDay.size > 0,
     energyAvailable,
     flag,
+    muscleGroupVolume,
+    overreaching,
   };
 }
 

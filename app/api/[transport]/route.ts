@@ -432,7 +432,7 @@ const handler = createMcpHandler(
       {
         title: "Recovery vs training load",
         description:
-          "Recovery analysis over N days (dashboard /recovery): resting heart rate and HRV overlaid on daily training load, plus an overtraining flag comparing recent days against an earlier baseline. Load energy is in kcal. Use to judge whether recent training is outpacing recovery.",
+          "Recovery analysis over N days (dashboard /recovery): resting heart rate and HRV overlaid on daily training load, plus an overtraining flag comparing recent days against an earlier baseline. Also returns weekly strength volume per muscle group (muscleGroupVolume) and an overreaching list flagging muscle groups whose volume has stayed above baseline for 2+ weeks while HRV trends down. Load energy is in kcal. Use to judge whether recent training is outpacing recovery.",
         inputSchema: {
           days: z.number().int().positive().max(365).default(30),
         },
