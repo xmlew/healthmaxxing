@@ -30,18 +30,27 @@ async function waitForServer(timeoutMs = 60_000): Promise<void> {
   throw new Error(`Server did not start on ${BASE} within ${timeoutMs}ms`);
 }
 
+type RpcFrame = {
+  result?: {
+    tools?: { name: string }[];
+    content?: { text?: string }[];
+    isError?: boolean;
+  };
+  error?: { message?: string } | null;
+};
+
 // mcp-handler replies as SSE: one `data: <json>` line carrying the JSON-RPC frame.
-function parseSse(text: string): any {
+function parseSse(text: string): RpcFrame {
   const line = text.split("\n").find((l) => l.startsWith("data:"));
   if (!line) throw new Error(`No SSE data line in response: ${text.slice(0, 200)}`);
-  return JSON.parse(line.slice("data:".length).trim());
+  return JSON.parse(line.slice("data:".length).trim()) as RpcFrame;
 }
 
 async function rpc(
   method: string,
   params: unknown,
   { auth = true }: { auth?: boolean } = {},
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: RpcFrame }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
@@ -53,15 +62,19 @@ async function rpc(
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   const raw = await res.text();
-  return { status: res.status, body: res.ok ? parseSse(raw) : raw };
+  return { status: res.status, body: res.ok ? parseSse(raw) : { error: { message: raw } } };
 }
 
 // Unwrap a tools/call result whose payload is JSON serialized inside content[0].text.
-async function callTool(name: string, args: Record<string, unknown> = {}): Promise<any> {
+// The payload shape varies per tool, so each caller passes the shape it asserts on.
+async function callTool<T = Record<string, unknown>>(
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<T> {
   const { body } = await rpc("tools/call", { name, arguments: args });
-  const text = body?.result?.content?.[0]?.text;
+  const text = body.result?.content?.[0]?.text;
   assert.ok(text, `tool ${name} returned no content text: ${JSON.stringify(body)}`);
-  return JSON.parse(text);
+  return JSON.parse(text) as T;
 }
 
 before(async () => {
@@ -103,11 +116,12 @@ after(async () => {
 
 test("tools/list exposes the four new analysis tools", async () => {
   const { body } = await rpc("tools/list", {});
-  const names: string[] = body.result.tools.map((t: { name: string }) => t.name);
+  const tools = body.result?.tools ?? [];
+  const names = tools.map((t) => t.name);
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(body.result.tools.length, 20, "expected 20 tools total (19 prior + get_progressive_overload_status)");
+  assert.equal(tools.length, 20, "expected 20 tools total (19 prior + get_progressive_overload_status)");
 });
 
 test("get_macro_summary returns per-day macros and targets", async () => {
@@ -120,12 +134,12 @@ test("get_macro_summary returns per-day macros and targets", async () => {
 
 test("strength tools are registered and round-trip a logged set", async () => {
   const { body } = await rpc("tools/list", {});
-  const names: string[] = body.result.tools.map((t: { name: string }) => t.name);
+  const names = (body.result?.tools ?? []).map((t) => t.name);
   for (const expected of ["log_set", "get_exercise_history", "get_1rm_estimate"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}`);
   }
 
-  const logged = await callTool("log_set", {
+  const logged = await callTool<{ ok: boolean; setId: number; sessionId: number; estimated1RM: number }>("log_set", {
     exercise: STRENGTH_TEST_EXERCISE,
     reps: 5,
     weight: 100,
@@ -137,7 +151,9 @@ test("strength tools are registered and round-trip a logged set", async () => {
   // Epley: 100 * (1 + 5/30) = 116.7
   assert.equal(logged.estimated1RM, 116.7, "log_set echoes the estimated 1RM");
 
-  const history = await callTool("get_exercise_history", { exercise: STRENGTH_TEST_EXERCISE });
+  const history = await callTool<{ sessions: { volume: number }[] }>("get_exercise_history", {
+    exercise: STRENGTH_TEST_EXERCISE,
+  });
   assert.ok(Array.isArray(history.sessions) && history.sessions.length >= 1, "history has a session");
   assert.equal(history.sessions[0].volume, 500, "session volume is weight*reps (100*5)");
 
@@ -152,7 +168,9 @@ test("strength tools are registered and round-trip a logged set", async () => {
 });
 
 test("get_recovery returns a recovery analysis shape", async () => {
-  const data = await callTool("get_recovery", { days: 30 });
+  const data = await callTool<{ days: number; series: unknown[]; flag: { status: string } }>("get_recovery", {
+    days: 30,
+  });
   assert.equal(data.days, 30);
   assert.ok(Array.isArray(data.series), "series should be an array");
   assert.ok(data.flag && typeof data.flag.status === "string", "flag.status should be present");
@@ -171,7 +189,7 @@ test("get_tdee returns a TDEE analysis shape", async () => {
 });
 
 test("get_correlation returns a correlation result for a valid pairing", async () => {
-  const data = await callTool("get_correlation", {
+  const data = await callTool<{ n: number; status: string; pairing: { key: string } }>("get_correlation", {
     pairing: "steps-vs-weight-loss-rate",
     days: 90,
   });
@@ -192,7 +210,7 @@ test("get_correlation rejects an unknown pairing", async () => {
 });
 
 test("get_anomalies returns every evaluated signal with a status", async () => {
-  const data = await callTool("get_anomalies");
+  const data = await callTool<Array<{ key: string; status: string }>>("get_anomalies");
   assert.ok(Array.isArray(data), "get_anomalies should return an array");
   for (const signal of data) {
     assert.ok(typeof signal.key === "string", "each signal has a key");
