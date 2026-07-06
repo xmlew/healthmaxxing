@@ -465,7 +465,22 @@ const handler = createMcpHandler(
         description:
           "Evaluates each health anomaly signal against its trailing 30-day baseline (dashboard home banner). Returns every signal with its status ('flagged', 'within_baseline', 'insufficient_data', or 'degenerate_baseline'); a flagged signal includes current value, baseline mean, and deviation %. Currently covers resting heart rate. Use to proactively surface early illness/overtraining signs.",
       },
-      async () => ok(await evaluateAnomalies()),
+      async () => {
+        const evaluations = await evaluateAnomalies();
+        // deviationPct/thresholdPct are fractions in lib/anomalies.ts; scale to
+        // percent for the response, the same way app/page.tsx does at render, so
+        // the "deviation %" the tool promises matches the number a human sees.
+        return ok(
+          evaluations.map((e) => ({
+            ...e,
+            anomaly: e.anomaly && {
+              ...e.anomaly,
+              deviationPct: round1(e.anomaly.deviationPct * 100),
+              thresholdPct: round1(e.anomaly.thresholdPct * 100),
+            },
+          })),
+        );
+      },
     );
 
     server.registerTool(
