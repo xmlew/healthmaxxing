@@ -104,6 +104,45 @@ export async function addSet(input: {
   return Number(rows[0].id);
 }
 
+export async function nextSetNumber(sessionId: number, exerciseId: number): Promise<number> {
+  const rows = await sql`
+    select coalesce(max(set_number), 0) + 1 as n
+    from strength_sets
+    where session_id = ${sessionId} and exercise_id = ${exerciseId}
+  `;
+  return Number(rows[0].n);
+}
+
+export const ONE_RM_FORMULAS = ["epley", "brzycki"] as const;
+export type OneRepMaxFormula = (typeof ONE_RM_FORMULAS)[number];
+
+// Estimated one-rep max from a working set. Epley: w*(1+reps/30);
+// Brzycki: w*36/(37-reps). A single rep is its own 1RM; both formulas break
+// down as reps approach Brzycki's asymptote, so clamp very high reps to the weight.
+export function estimate1RM(weight: number, reps: number, formula: OneRepMaxFormula = "epley"): number {
+  if (reps <= 1) return weight;
+  if (formula === "brzycki") {
+    if (reps >= 37) return weight;
+    return (weight * 36) / (37 - reps);
+  }
+  return weight * (1 + reps / 30);
+}
+
+export type OneRepMaxPoint = { date: string; oneRepMax: number };
+
+// Best estimated 1RM per session date, ascending - the series a 1RM chart plots.
+export function oneRepMaxSeries(sets: StrengthSetRow[], formula: OneRepMaxFormula): OneRepMaxPoint[] {
+  const byDate = new Map<string, number>();
+  for (const s of sets) {
+    if (s.weight == null || s.reps == null) continue;
+    const est = estimate1RM(s.weight, s.reps, formula);
+    byDate.set(s.sessionDate, Math.max(byDate.get(s.sessionDate) ?? 0, est));
+  }
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, oneRepMax]) => ({ date, oneRepMax: Math.round(oneRepMax * 10) / 10 }));
+}
+
 export async function getExerciseHistory(
   exerciseName: string,
   days: number,
@@ -133,4 +172,37 @@ export async function getExerciseHistory(
     rpe: r.rpe == null ? null : Number(r.rpe),
     rir: r.rir == null ? null : Number(r.rir),
   }));
+}
+
+export const UNTAGGED_MUSCLE_GROUP = "untagged";
+
+export type MuscleGroupWeeklyVolume = {
+  muscleGroup: string;
+  weeks: { weekStart: string; volume: number }[];
+};
+
+// Weekly training volume (sum of weight x reps) per muscle group over N days.
+// Weeks are Monday-anchored; only weeks with logged sets appear. Sets on an
+// exercise with no muscle_group fall under 'untagged'.
+export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGroupWeeklyVolume[]> {
+  const rows = await sql`
+    select
+      coalesce(e.muscle_group, ${UNTAGGED_MUSCLE_GROUP}) as muscle_group,
+      to_char(date_trunc('week', ss.session_date), 'YYYY-MM-DD') as week_start,
+      sum(coalesce(st.weight, 0) * coalesce(st.reps, 0)) as volume
+    from strength_sets st
+    join strength_sessions ss on ss.id = st.session_id
+    join exercises e on e.id = st.exercise_id
+    where ss.session_date >= (now() at time zone ${TIME_ZONE})::date - ${days}::int
+    group by 1, 2
+    order by 1, 2
+  `;
+  const byGroup = new Map<string, { weekStart: string; volume: number }[]>();
+  for (const r of rows) {
+    const group = r.muscle_group as string;
+    const weeks = byGroup.get(group) ?? [];
+    weeks.push({ weekStart: r.week_start as string, volume: Math.round(Number(r.volume)) });
+    byGroup.set(group, weeks);
+  }
+  return [...byGroup.entries()].map(([muscleGroup, weeks]) => ({ muscleGroup, weeks }));
 }

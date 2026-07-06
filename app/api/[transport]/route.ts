@@ -28,7 +28,18 @@ import { getTdeeAnalysis } from "@/lib/tdee";
 import { asGoalPhase, evaluatePace, GOAL_PHASES } from "@/lib/goals";
 import { evaluateAnomalies } from "@/lib/anomalies";
 import { PAIRINGS, type PairingKey } from "@/lib/correlation";
-import { kjToKcal, TIME_ZONE } from "@/lib/time";
+import {
+  addSet,
+  estimate1RM,
+  getExerciseHistory,
+  nextSetNumber,
+  oneRepMaxSeries,
+  resolveManualSession,
+  upsertExercise,
+  ONE_RM_FORMULAS,
+  type StrengthSetRow,
+} from "@/lib/strength";
+import { dayKeyInZone, kjToKcal, TIME_ZONE } from "@/lib/time";
 
 const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]];
 
@@ -441,7 +452,7 @@ const handler = createMcpHandler(
       {
         title: "Recovery vs training load",
         description:
-          "Recovery analysis over N days (dashboard /recovery): resting heart rate and HRV overlaid on daily training load, plus an overtraining flag comparing recent days against an earlier baseline. Load energy is in kcal. Use to judge whether recent training is outpacing recovery.",
+          "Recovery analysis over N days (dashboard /recovery): resting heart rate and HRV overlaid on daily training load, plus an overtraining flag comparing recent days against an earlier baseline. Also returns weekly strength volume per muscle group (muscleGroupVolume) and an overreaching list flagging muscle groups whose volume has stayed above baseline for 2+ weeks while HRV trends down. Load energy is in kcal. Use to judge whether recent training is outpacing recovery.",
         inputSchema: {
           days: z.number().int().positive().max(365).default(30),
         },
@@ -530,6 +541,120 @@ const handler = createMcpHandler(
             proteinMet: proteinTarget != null && d.proteinG != null ? d.proteinG >= proteinTarget : null,
           })),
         });
+      }
+    );
+
+    server.registerTool(
+      "log_set",
+      {
+        title: "Log a strength set",
+        description:
+          "Record one working set of a strength exercise. `exercise` and `reps` required; `weight` in kg (0 for bodyweight), `rpe`/`rir` optional. `muscle_group` (e.g. push/pull/legs or a specific muscle) is stored on the exercise the first time you name it. `set_number` auto-increments within the day's session if omitted. `date` (ISO) defaults to now; all sets on one calendar day share one session.",
+        inputSchema: {
+          exercise: z.string().min(1),
+          reps: z.number().int().positive(),
+          weight: z.number().finite().nonnegative().default(0),
+          rpe: z.number().finite().min(0).max(10).optional(),
+          rir: z.number().finite().min(0).max(10).optional(),
+          muscle_group: z.string().optional(),
+          set_number: z.number().int().positive().optional(),
+          date: z.string().optional(),
+        },
+      },
+      async ({ exercise, reps, weight, rpe, rir, muscle_group, set_number, date }) => {
+        const at = resolveLoggedAt(date);
+        if ("error" in at) return fail(at.error);
+        const sessionDate = dayKeyInZone(new Date(at.iso));
+        const exerciseId = await upsertExercise({ name: exercise.trim(), muscleGroup: muscle_group ?? null });
+        const sessionId = await resolveManualSession(sessionDate);
+        const setNumber = set_number ?? (await nextSetNumber(sessionId, exerciseId));
+        const setId = await addSet({
+          sessionId,
+          exerciseId,
+          setNumber,
+          weight,
+          reps,
+          rpe: rpe ?? null,
+          rir: rir ?? null,
+        });
+        return ok({
+          ok: true,
+          setId,
+          sessionId,
+          sessionDate,
+          exercise: exercise.trim(),
+          setNumber,
+          weight,
+          reps,
+          estimated1RM: round1(estimate1RM(weight, reps)),
+        });
+      }
+    );
+
+    server.registerTool(
+      "get_exercise_history",
+      {
+        title: "Exercise history",
+        description:
+          "Sets for one exercise over N days, grouped by session, with per-set estimated 1RM, per-session total volume (sum of weight x reps), and each session's best estimated 1RM. `formula` selects the 1RM estimator (epley or brzycki).",
+        inputSchema: {
+          exercise: z.string().min(1),
+          days: z.number().int().positive().max(365).default(90),
+          formula: z.enum(ONE_RM_FORMULAS).default("epley"),
+        },
+      },
+      async ({ exercise, days, formula }) => {
+        const sets = await getExerciseHistory(exercise, days);
+        if (sets.length === 0) {
+          return ok({ exercise, days, formula, sessions: [], message: "No sets logged for this exercise in range." });
+        }
+        const bySession = new Map<string, StrengthSetRow[]>();
+        for (const s of sets) {
+          const list = bySession.get(s.sessionDate) ?? [];
+          list.push(s);
+          bySession.set(s.sessionDate, list);
+        }
+        const sessions = [...bySession.entries()].map(([date, rows]) => {
+          const setsOut = rows.map((r) => ({
+            setNumber: r.setNumber,
+            weight: r.weight,
+            reps: r.reps,
+            rpe: r.rpe,
+            rir: r.rir,
+            estimated1RM:
+              r.weight != null && r.reps != null ? round1(estimate1RM(r.weight, r.reps, formula)) : null,
+          }));
+          const volume = rows.reduce((sum, r) => sum + (r.weight ?? 0) * (r.reps ?? 0), 0);
+          const bestEstimated1RM = setsOut.reduce<number | null>(
+            (best, s) => (s.estimated1RM != null && (best == null || s.estimated1RM > best) ? s.estimated1RM : best),
+            null,
+          );
+          return { date, muscleGroup: rows[0].muscleGroup, sets: setsOut, volume: Math.round(volume), bestEstimated1RM };
+        });
+        return ok({ exercise, days, formula, sessions });
+      }
+    );
+
+    server.registerTool(
+      "get_1rm_estimate",
+      {
+        title: "Estimated 1RM",
+        description:
+          "Estimated one-rep max for an exercise: the current (most recent session's best) and all-time best over N days, plus a per-session series for charting. `formula` is epley or brzycki.",
+        inputSchema: {
+          exercise: z.string().min(1),
+          days: z.number().int().positive().max(365).default(365),
+          formula: z.enum(ONE_RM_FORMULAS).default("epley"),
+        },
+      },
+      async ({ exercise, days, formula }) => {
+        const sets = await getExerciseHistory(exercise, days);
+        const series = oneRepMaxSeries(sets, formula);
+        if (series.length === 0) {
+          return ok({ exercise, days, formula, current: null, best: null, series: [], message: "No sets logged for this exercise in range." });
+        }
+        const best = series.reduce((m, p) => Math.max(m, p.oneRepMax), 0);
+        return ok({ exercise, days, formula, current: series[series.length - 1].oneRepMax, best, series });
       }
     );
 
