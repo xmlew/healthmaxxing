@@ -104,6 +104,20 @@ export async function addSet(input: {
   return Number(rows[0].id);
 }
 
+export async function deleteSet(id: string): Promise<boolean> {
+  const rows = await sql`delete from strength_sets where id = ${id} returning session_id`;
+  if (rows.length === 0) return false;
+  // Tidy up a now-empty manual session; keep workout-linked (Apple Health) ones,
+  // which represent a real session even with no sets.
+  await sql`
+    delete from strength_sessions
+    where id = ${rows[0].session_id}
+      and workout_id is null
+      and id not in (select session_id from strength_sets)
+  `;
+  return true;
+}
+
 export async function nextSetNumber(sessionId: number, exerciseId: number): Promise<number> {
   const rows = await sql`
     select coalesce(max(set_number), 0) + 1 as n

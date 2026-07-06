@@ -121,7 +121,7 @@ test("tools/list exposes the four new analysis tools", async () => {
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(tools.length, 20, "expected 20 tools total (19 prior + get_progressive_overload_status)");
+  assert.equal(tools.length, 22, "expected 22 tools total (20 prior + list_exercises + delete_set)");
 });
 
 test("get_macro_summary returns per-day macros and targets", async () => {
@@ -151,11 +151,13 @@ test("strength tools are registered and round-trip a logged set", async () => {
   // Epley: 100 * (1 + 5/30) = 116.7
   assert.equal(logged.estimated1RM, 116.7, "log_set echoes the estimated 1RM");
 
-  const history = await callTool<{ sessions: { volume: number }[] }>("get_exercise_history", {
-    exercise: STRENGTH_TEST_EXERCISE,
-  });
+  const history = await callTool<{ sessions: { volume: number; sets: { setId: number }[] }[] }>(
+    "get_exercise_history",
+    { exercise: STRENGTH_TEST_EXERCISE },
+  );
   assert.ok(Array.isArray(history.sessions) && history.sessions.length >= 1, "history has a session");
   assert.equal(history.sessions[0].volume, 500, "session volume is weight*reps (100*5)");
+  assert.ok(history.sessions[0].sets[0].setId, "each set carries a setId");
 
   const oneRm = await callTool("get_1rm_estimate", { exercise: STRENGTH_TEST_EXERCISE, formula: "brzycki" });
   // Brzycki: 100 * 36/(37-5) = 112.5
@@ -165,6 +167,13 @@ test("strength tools are registered and round-trip a logged set", async () => {
   assert.ok("stalled" in overload, "overload status has a stalled flag");
   assert.ok(Array.isArray(overload.sessions), "overload status has a sessions array");
   assert.equal(overload.latestSessionVolume, 500, "latest session volume is 100*5");
+
+  const exercises = await callTool<Array<{ name: string }>>("list_exercises");
+  assert.ok(exercises.some((e) => e.name === STRENGTH_TEST_EXERCISE), "list_exercises includes the logged exercise");
+
+  // delete_set removes the logged set (done last so the assertions above still see it)
+  const del = await callTool<{ ok: boolean }>("delete_set", { id: String(history.sessions[0].sets[0].setId) });
+  assert.equal(del.ok, true, "delete_set removes the set");
 });
 
 test("get_recovery returns a recovery analysis shape", async () => {

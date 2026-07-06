@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { addSet, nextSetNumber, resolveManualSession, upsertExercise } from "@/lib/strength";
+import { addSet, deleteSet, nextSetNumber, resolveManualSession, upsertExercise } from "@/lib/strength";
 import { dayKeyInZone } from "@/lib/time";
 
 function num(formData: FormData, key: string): number | null {
@@ -40,6 +40,12 @@ export async function logSet(formData: FormData) {
     rir: num(formData, "rir"),
   });
 
+  revalidatePath("/strength");
+  revalidatePath("/recovery");
+}
+
+export async function removeSet(id: string) {
+  await deleteSet(id);
   revalidatePath("/strength");
   revalidatePath("/recovery");
 }
