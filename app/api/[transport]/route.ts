@@ -312,6 +312,8 @@ const handler = createMcpHandler(
               loggedAt: r.logged_at,
               weightKg: numOrNull(r.weight_kg),
               bodyFatPct: numOrNull(r.body_fat_pct),
+              skeletalMuscleMassKg: numOrNull(r.skeletal_muscle_mass_kg),
+              waistCm: numOrNull(r.waist_cm),
               note: r.note,
             }))
           );
@@ -344,9 +346,10 @@ const handler = createMcpHandler(
           body_fat_pct: z.number().finite().nonnegative().max(100).optional(),
           skeletal_muscle_mass_kg: z.number().finite().nonnegative().max(500).optional(),
           waist_cm: z.number().finite().positive().max(500).optional(),
+          note: z.string().optional(),
         },
       },
-      async ({ kg, date, body_fat_pct, skeletal_muscle_mass_kg, waist_cm }) => {
+      async ({ kg, date, body_fat_pct, skeletal_muscle_mass_kg, waist_cm, note }) => {
         const at = resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         await addWeightLog({
@@ -355,7 +358,7 @@ const handler = createMcpHandler(
           bodyFatPct: body_fat_pct ?? null,
           skeletalMuscleMassKg: skeletal_muscle_mass_kg ?? null,
           waistCm: waist_cm ?? null,
-          note: null,
+          note: note ?? null,
         });
         return ok({
           ok: true,
@@ -364,6 +367,7 @@ const handler = createMcpHandler(
           bodyFatPct: body_fat_pct ?? null,
           skeletalMuscleMassKg: skeletal_muscle_mass_kg ?? null,
           waistCm: waist_cm ?? null,
+          note: note ?? null,
         });
       }
     );

@@ -50,8 +50,17 @@ export default async function LogPage() {
                       {log.body_fat_pct != null ? (
                         <span className="ml-2 text-muted">{Number(log.body_fat_pct).toFixed(1)}% BF</span>
                       ) : null}
+                      {log.skeletal_muscle_mass_kg != null ? (
+                        <span className="ml-2 text-muted">{Number(log.skeletal_muscle_mass_kg).toFixed(1)} kg muscle</span>
+                      ) : null}
+                      {log.waist_cm != null ? (
+                        <span className="ml-2 text-muted">{Number(log.waist_cm).toFixed(1)} cm waist</span>
+                      ) : null}
                     </p>
-                    <p className="text-xs text-muted">{formatWhen(log.logged_at)}</p>
+                    <p className="text-xs text-muted">
+                      {formatWhen(log.logged_at)}
+                      {log.note ? ` · ${log.note}` : ""}
+                    </p>
                   </div>
                   <form action={removeWeightLog.bind(null, log.id)}>
                     <button

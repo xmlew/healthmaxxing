@@ -75,6 +75,15 @@ export function WeightForm() {
         </label>
       </div>
       <label className="flex flex-col gap-1.5 text-sm">
+        <span className="text-muted">Note (optional)</span>
+        <input
+          name="note"
+          type="text"
+          placeholder="Morning, fasted"
+          className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
+        />
+      </label>
+      <label className="flex flex-col gap-1.5 text-sm">
         <span className="text-muted">When</span>
         <input
           name="loggedAt"

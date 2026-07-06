@@ -162,7 +162,7 @@ export async function getTodayFoodTotal() {
 
 export async function getRecentWeightLogs(limit: number) {
   return sql`
-    select id, logged_at, weight_kg, body_fat_pct, note
+    select id, logged_at, weight_kg, body_fat_pct, skeletal_muscle_mass_kg, waist_cm, note
     from weight_logs
     order by logged_at desc
     limit ${limit}
