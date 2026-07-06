@@ -28,6 +28,8 @@ export async function logWeight(formData: FormData) {
     loggedAt: loggedAtOrNow(formData),
     weightKg,
     bodyFatPct: num(formData, "bodyFatPct"),
+    skeletalMuscleMassKg: num(formData, "skeletalMuscleMassKg"),
+    waistCm: num(formData, "waistCm"),
     note: str(formData, "note"),
   });
 

@@ -53,6 +53,13 @@ create table if not exists weight_logs (
 
 create index if not exists weight_logs_logged_at_idx on weight_logs (logged_at desc);
 
+-- Body composition beyond scale weight. weight_logs is already a measurement
+-- snapshot (weight + body_fat_pct); a smart-scale reading adds these in the same
+-- event, so they extend this row rather than living in a second table that would
+-- duplicate weight_kg (the single source of truth for weight across the app).
+alter table weight_logs add column if not exists skeletal_muscle_mass_kg double precision;
+alter table weight_logs add column if not exists waist_cm double precision;
+
 create table if not exists food_logs (
   id bigserial primary key,
   logged_at timestamptz not null,

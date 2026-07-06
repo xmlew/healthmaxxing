@@ -319,17 +319,34 @@ const handler = createMcpHandler(
       {
         title: "Log weight",
         description:
-          "Record a manual weight entry (kg). `date` (ISO string) defaults to now. Re-logging the same timestamp updates that entry.",
+          "Record a manual weight / body-composition entry. `kg` required; `body_fat_pct`, `skeletal_muscle_mass_kg`, and `waist_cm` are optional (a smart-scale reading logs them together). `date` (ISO string) defaults to now. Re-logging the same timestamp updates that entry.",
         inputSchema: {
           kg: z.number().finite().positive().max(500),
           date: z.string().optional(),
+          body_fat_pct: z.number().finite().nonnegative().max(100).optional(),
+          skeletal_muscle_mass_kg: z.number().finite().nonnegative().max(500).optional(),
+          waist_cm: z.number().finite().positive().max(500).optional(),
         },
       },
-      async ({ kg, date }) => {
+      async ({ kg, date, body_fat_pct, skeletal_muscle_mass_kg, waist_cm }) => {
         const at = resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
-        await addWeightLog({ loggedAt: at.iso, weightKg: kg, bodyFatPct: null, note: null });
-        return ok({ ok: true, loggedAt: at.iso, weightKg: kg });
+        await addWeightLog({
+          loggedAt: at.iso,
+          weightKg: kg,
+          bodyFatPct: body_fat_pct ?? null,
+          skeletalMuscleMassKg: skeletal_muscle_mass_kg ?? null,
+          waistCm: waist_cm ?? null,
+          note: null,
+        });
+        return ok({
+          ok: true,
+          loggedAt: at.iso,
+          weightKg: kg,
+          bodyFatPct: body_fat_pct ?? null,
+          skeletalMuscleMassKg: skeletal_muscle_mass_kg ?? null,
+          waistCm: waist_cm ?? null,
+        });
       }
     );
 
