@@ -107,7 +107,7 @@ test("tools/list exposes the four new analysis tools", async () => {
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(body.result.tools.length, 19, "expected 19 tools total (15 prior + 3 strength + get_macro_summary)");
+  assert.equal(body.result.tools.length, 20, "expected 20 tools total (19 prior + get_progressive_overload_status)");
 });
 
 test("get_macro_summary returns per-day macros and targets", async () => {
@@ -144,6 +144,11 @@ test("strength tools are registered and round-trip a logged set", async () => {
   const oneRm = await callTool("get_1rm_estimate", { exercise: STRENGTH_TEST_EXERCISE, formula: "brzycki" });
   // Brzycki: 100 * 36/(37-5) = 112.5
   assert.equal(oneRm.current, 112.5, "get_1rm_estimate uses the requested formula");
+
+  const overload = await callTool("get_progressive_overload_status", { exercise: STRENGTH_TEST_EXERCISE });
+  assert.ok("stalled" in overload, "overload status has a stalled flag");
+  assert.ok(Array.isArray(overload.sessions), "overload status has a sessions array");
+  assert.equal(overload.latestSessionVolume, 500, "latest session volume is 100*5");
 });
 
 test("get_recovery returns a recovery analysis shape", async () => {

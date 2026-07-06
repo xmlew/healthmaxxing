@@ -1,5 +1,6 @@
 import { TrendLine } from "@/components/charts/trend-line";
 import {
+  computeOverloadStatus,
   estimate1RM,
   getExerciseHistory,
   listExercises,
@@ -59,7 +60,12 @@ export default async function StrengthPage() {
   const withHistory = await Promise.all(
     exercises.map(async (exercise) => {
       const sets = await getExerciseHistory(exercise.name, HISTORY_DAYS);
-      return { exercise, sets, oneRm: oneRepMaxSeries(sets, "epley") };
+      return {
+        exercise,
+        sets,
+        oneRm: oneRepMaxSeries(sets, "epley"),
+        overload: computeOverloadStatus(exercise.name, exercise.muscleGroup, sets),
+      };
     }),
   );
   const active = withHistory.filter((e) => e.sets.length > 0);
@@ -79,7 +85,7 @@ export default async function StrengthPage() {
           Claude), or import an Apple Health &ldquo;Traditional Strength Training&rdquo; workout.
         </div>
       ) : (
-        active.map(({ exercise, sets, oneRm }) => {
+        active.map(({ exercise, sets, oneRm, overload }) => {
           const sessions = summarizeSessions(sets);
           const current = oneRm.length > 0 ? oneRm[oneRm.length - 1].oneRepMax : null;
           const best = oneRm.reduce((m, p) => Math.max(m, p.oneRepMax), 0);
@@ -87,9 +93,21 @@ export default async function StrengthPage() {
             <section key={exercise.id} className="rounded-3xl border border-border bg-surface p-6">
               <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
                 <div>
-                  <h2 className="font-display text-xl capitalize">{exercise.name}</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-display text-xl capitalize">{exercise.name}</h2>
+                    {overload.stalled ? (
+                      <span className="rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[11px] font-medium text-warn">
+                        Stalled
+                      </span>
+                    ) : null}
+                  </div>
                   {exercise.muscleGroup ? (
                     <p className="text-xs uppercase tracking-wide text-muted">{exercise.muscleGroup}</p>
+                  ) : null}
+                  {overload.stalled ? (
+                    <p className="mt-1 text-xs text-warn">
+                      No best-set PR in {overload.sessionsSinceImprovement} sessions.
+                    </p>
                   ) : null}
                 </div>
                 {current != null ? (

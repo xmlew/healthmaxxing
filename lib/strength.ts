@@ -206,3 +206,68 @@ export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGro
   }
   return [...byGroup.entries()].map(([muscleGroup, weeks]) => ({ muscleGroup, weeks }));
 }
+
+// Sessions with no new best-set-volume PR after which an exercise is "stalled" -
+// the real signal that progressive overload has plateaued (mirrors the
+// recovery overtraining flag: a trailing-window comparison against the best so far).
+export const STALL_SESSIONS = 3;
+
+export type OverloadSession = { date: string; sessionVolume: number; bestSetVolume: number };
+
+export type OverloadStatus = {
+  exercise: string;
+  muscleGroup: string | null;
+  sessions: OverloadSession[];
+  latestSessionVolume: number | null;
+  bestSetVolumeAllTime: number | null;
+  sessionsSinceImprovement: number;
+  stalled: boolean;
+};
+
+// Best-set volume = the heaviest single set's weight x reps; session volume = the
+// sum across sets. An exercise stalls when best-set volume hasn't set a new high
+// for STALL_SESSIONS+ sessions (needs more than that many sessions to judge).
+export function computeOverloadStatus(
+  exercise: string,
+  muscleGroup: string | null,
+  sets: StrengthSetRow[],
+  stallSessions = STALL_SESSIONS,
+): OverloadStatus {
+  const bySession = new Map<string, StrengthSetRow[]>();
+  for (const s of sets) {
+    const list = bySession.get(s.sessionDate) ?? [];
+    list.push(s);
+    bySession.set(s.sessionDate, list);
+  }
+  const sessions: OverloadSession[] = [...bySession.entries()]
+    .map(([date, rows]) => {
+      const setVolume = (r: StrengthSetRow) => (r.weight ?? 0) * (r.reps ?? 0);
+      return {
+        date,
+        sessionVolume: Math.round(rows.reduce((sum, r) => sum + setVolume(r), 0)),
+        bestSetVolume: Math.round(rows.reduce((max, r) => Math.max(max, setVolume(r)), 0)),
+      };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  let runningMax = -Infinity;
+  let lastImprovementIdx = -1;
+  sessions.forEach((s, i) => {
+    if (s.bestSetVolume > runningMax) {
+      runningMax = s.bestSetVolume;
+      lastImprovementIdx = i;
+    }
+  });
+
+  const sessionsSinceImprovement = sessions.length > 0 ? sessions.length - 1 - lastImprovementIdx : 0;
+
+  return {
+    exercise,
+    muscleGroup,
+    sessions,
+    latestSessionVolume: sessions.length > 0 ? sessions[sessions.length - 1].sessionVolume : null,
+    bestSetVolumeAllTime: runningMax === -Infinity ? null : runningMax,
+    sessionsSinceImprovement,
+    stalled: sessions.length > stallSessions && sessionsSinceImprovement >= stallSessions,
+  };
+}
