@@ -12,6 +12,7 @@ const SECRET = process.env.MCP_SECRET;
 
 // Sentinel exercise the strength round-trip test writes; cleaned up in after().
 const STRENGTH_TEST_EXERCISE = "__mcp_test_lift__";
+let strengthTestSessionId: number | null = null;
 
 let server: ChildProcess;
 
@@ -85,7 +86,16 @@ after(async () => {
   try {
     await sql`delete from strength_sets where exercise_id in (select id from exercises where name = ${STRENGTH_TEST_EXERCISE})`;
     await sql`delete from exercises where name = ${STRENGTH_TEST_EXERCISE}`;
-    await sql`delete from strength_sessions where workout_id is null and id not in (select session_id from strength_sets)`;
+    // Only the exact session this test created, and only if it's now empty -
+    // never other empty manual sessions on the shared DB.
+    if (strengthTestSessionId != null) {
+      await sql`
+        delete from strength_sessions
+        where id = ${strengthTestSessionId}
+          and workout_id is null
+          and id not in (select session_id from strength_sets)
+      `;
+    }
   } finally {
     await sql.end();
   }
@@ -115,6 +125,7 @@ test("strength tools are registered and round-trip a logged set", async () => {
   });
   assert.equal(logged.ok, true, "log_set should succeed");
   assert.ok(logged.setId, "log_set returns a setId");
+  strengthTestSessionId = logged.sessionId;
   // Epley: 100 * (1 + 5/30) = 116.7
   assert.equal(logged.estimated1RM, 116.7, "log_set echoes the estimated 1RM");
 
