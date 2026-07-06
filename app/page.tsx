@@ -37,7 +37,11 @@ export default async function DashboardPage() {
 
   const proteinToday = foodToday.proteinG;
   const proteinTarget = goal?.daily_protein_target != null ? Number(goal.daily_protein_target) : null;
-  const underProtein = proteinTarget != null && proteinTarget > 0 && proteinToday < proteinTarget;
+  // Nudge when behind on protein, but not when food was logged without protein
+  // tracked (sum coalesces to 0) - that reads as "0 g" when we simply don't know.
+  const proteinTracked = foodToday.entries === 0 || proteinToday > 0;
+  const underProtein =
+    proteinTarget != null && proteinTarget > 0 && proteinToday < proteinTarget && proteinTracked;
 
   const weightKg = weight ? Number(weight.weight_kg) : null;
   const startWeight = goal?.starting_weight_kg ? Number(goal.starting_weight_kg) : null;

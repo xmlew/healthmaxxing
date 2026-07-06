@@ -310,6 +310,9 @@ const handler = createMcpHandler(
             loggedAt: r.logged_at,
             description: r.description,
             calories: numOrNull(r.calories),
+            proteinG: numOrNull(r.protein_g),
+            carbsG: numOrNull(r.carbs_g),
+            fatG: numOrNull(r.fat_g),
             meal: r.meal,
           }))
         );
