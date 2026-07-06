@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { TrendLine } from "@/components/charts/trend-line";
 import { DualTrendLine } from "@/components/charts/dual-trend-line";
+import { BodyCompositionChart } from "@/components/charts/body-composition-chart";
 import { kjToKcal } from "@/lib/time";
 import {
   getEnergyOutDailyTotals,
@@ -60,6 +61,14 @@ export default async function TrendsPage({
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, v]) => ({ date, in: v.in, out: v.out }));
 
+  // Split each weigh-in that carries a body-fat reading into lean vs fat mass.
+  const bodyCompositionData = weight
+    .filter((w) => w.bodyFatPct != null)
+    .map((w) => {
+      const fat = (w.weightKg * (w.bodyFatPct as number)) / 100;
+      return { date: w.date.toISOString(), lean: w.weightKg - fat, fat };
+    });
+
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -89,6 +98,12 @@ export default async function TrendsPage({
           goal={goal?.target_weight_kg != null ? Number(goal.target_weight_kg) : undefined}
         />
       </ChartCard>
+
+      {bodyCompositionData.length > 0 ? (
+        <ChartCard title="Body composition" unit="kg">
+          <BodyCompositionChart data={bodyCompositionData} />
+        </ChartCard>
+      ) : null}
 
       <ChartCard title="Calories in vs. out" unit="kcal">
         <DualTrendLine data={caloriesData} />

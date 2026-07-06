@@ -48,6 +48,30 @@ export function WeightForm() {
           />
         </label>
       </div>
+      <div className="grid grid-cols-2 gap-4">
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span className="text-muted">Muscle mass kg (optional)</span>
+          <input
+            name="skeletalMuscleMassKg"
+            type="number"
+            step="0.1"
+            inputMode="decimal"
+            placeholder="35.2"
+            className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
+          />
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span className="text-muted">Waist cm (optional)</span>
+          <input
+            name="waistCm"
+            type="number"
+            step="0.1"
+            inputMode="decimal"
+            placeholder="81"
+            className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
+          />
+        </label>
+      </div>
       <label className="flex flex-col gap-1.5 text-sm">
         <span className="text-muted">When</span>
         <input

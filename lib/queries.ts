@@ -63,12 +63,16 @@ export async function getLatestWeight() {
 
 export async function getWeightSeries(days: number) {
   const rows = await sql`
-    select logged_at, weight_kg
+    select logged_at, weight_kg, body_fat_pct
     from weight_logs
     where logged_at >= now() - (${days} || ' days')::interval
     order by logged_at asc
   `;
-  return rows.map((r) => ({ date: r.logged_at as Date, weightKg: Number(r.weight_kg) }));
+  return rows.map((r) => ({
+    date: r.logged_at as Date,
+    weightKg: Number(r.weight_kg),
+    bodyFatPct: r.body_fat_pct == null ? null : Number(r.body_fat_pct),
+  }));
 }
 
 export async function getGoal() {
@@ -96,13 +100,22 @@ export async function upsertGoal(input: {
   `;
 }
 
-export async function addWeightLog(input: { loggedAt: string; weightKg: number; bodyFatPct: number | null; note: string | null }) {
+export async function addWeightLog(input: {
+  loggedAt: string;
+  weightKg: number;
+  bodyFatPct: number | null;
+  skeletalMuscleMassKg: number | null;
+  waistCm: number | null;
+  note: string | null;
+}) {
   await sql`
-    insert into weight_logs (logged_at, weight_kg, body_fat_pct, source, note)
-    values (${input.loggedAt}::timestamptz, ${input.weightKg}, ${input.bodyFatPct}, 'manual', ${input.note})
+    insert into weight_logs (logged_at, weight_kg, body_fat_pct, skeletal_muscle_mass_kg, waist_cm, source, note)
+    values (${input.loggedAt}::timestamptz, ${input.weightKg}, ${input.bodyFatPct}, ${input.skeletalMuscleMassKg}, ${input.waistCm}, 'manual', ${input.note})
     on conflict (logged_at, source) do update set
       weight_kg = excluded.weight_kg,
       body_fat_pct = excluded.body_fat_pct,
+      skeletal_muscle_mass_kg = excluded.skeletal_muscle_mass_kg,
+      waist_cm = excluded.waist_cm,
       note = excluded.note
   `;
 }
