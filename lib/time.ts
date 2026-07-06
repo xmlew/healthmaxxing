@@ -19,3 +19,10 @@ const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
 export function dayKeyInZone(date: Date): string {
   return dayKeyFormatter.format(date);
 }
+
+export function shiftDayKey(dayKey: string, deltaDays: number): string {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day));
+  shifted.setUTCDate(shifted.getUTCDate() + deltaDays);
+  return shifted.toISOString().slice(0, 10);
+}

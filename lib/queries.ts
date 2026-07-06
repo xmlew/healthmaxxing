@@ -1,5 +1,14 @@
 import { sql } from "./db";
 import { TIME_ZONE } from "./time";
+import {
+  correlate,
+  weightLossRateSeries,
+  type CorrelationResult,
+  type PairingDef,
+  type PairingKey,
+  type SeriesPoint,
+  PAIRINGS,
+} from "./correlation";
 
 function todayStart() {
   return sql`(date_trunc('day', now() at time zone ${TIME_ZONE}) at time zone ${TIME_ZONE})`;
@@ -183,6 +192,46 @@ export async function getBasalEnergyDailyTotals(days: number) {
     order by 1 asc
   `;
   return rows.map((r) => ({ date: r.day as Date, kj: Number(r.total_kj) }));
+}
+
+export type PairingCorrelation = CorrelationResult & { pairing: PairingDef };
+
+async function seriesForPairing(
+  key: PairingKey,
+  days: number,
+): Promise<{ x: SeriesPoint[]; y: SeriesPoint[] }> {
+  switch (key) {
+    case "sleep-vs-next-day-rhr": {
+      const [sleep, restingHr] = await Promise.all([
+        getMetricSeries("sleep_analysis", days),
+        getMetricSeries("resting_heart_rate", days),
+      ]);
+      return {
+        x: sleep.map((s) => ({ date: s.date, value: s.qty })),
+        y: restingHr.map((s) => ({ date: s.date, value: s.qty })),
+      };
+    }
+    case "steps-vs-weight-loss-rate": {
+      const [steps, weights] = await Promise.all([
+        getMetricSeries("step_count", days),
+        getWeightSeries(days),
+      ]);
+      return {
+        x: steps.map((s) => ({ date: s.date, value: s.qty })),
+        y: weightLossRateSeries(weights.map((w) => ({ date: w.date, value: w.weightKg }))),
+      };
+    }
+  }
+}
+
+export async function getPairingCorrelation(
+  key: PairingKey,
+  days: number,
+): Promise<PairingCorrelation> {
+  const pairing = PAIRINGS.find((p) => p.key === key);
+  if (!pairing) throw new Error(`Unknown correlation pairing: ${key}`);
+  const { x, y } = await seriesForPairing(key, days);
+  return { ...correlate(x, y, pairing.lagDays), pairing };
 }
 
 export async function getRecentWorkouts(limit: number) {

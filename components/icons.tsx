@@ -63,6 +63,19 @@ export function TdeeIcon({ className }: IconProps) {
   );
 }
 
+export function CorrelationIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M4 4v16h16" />
+      <circle cx="8" cy="15" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="14" cy="10" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="17.5" cy="7" r="1.1" fill="currentColor" stroke="none" />
+      <path d="M7 16.5 18 6" strokeDasharray="3 2" />
+    </svg>
+  );
+}
+
 export function GoalIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className}>
