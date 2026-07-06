@@ -1,6 +1,6 @@
 import { getMetricSeries, getWorkoutDailyLoad } from "./queries";
 import { weeklyVolumeByMuscleGroup, type MuscleGroupWeeklyVolume } from "./strength";
-import { dayKeyInZone, kjToKcal } from "./time";
+import { dayKeyInZone, kjToKcal, shiftDayKey } from "./time";
 
 const MS_PER_DAY = 86_400_000;
 const RECENT_WINDOW_FRACTION = 1 / 3;
@@ -52,6 +52,21 @@ export type RecoveryAnalysis = {
   overreaching: OverreachingSignal[];
 };
 
+// weeklyVolumeByMuscleGroup only emits weeks that had sets, so a deload week is
+// simply absent. Fill the calendar gaps with 0 volume before scanning, so "N
+// weeks running" means consecutive calendar weeks and a rest week breaks the streak.
+function fillCalendarWeeks(weeks: { weekStart: string; volume: number }[]): { weekStart: string; volume: number }[] {
+  if (weeks.length === 0) return [];
+  const byWeek = new Map(weeks.map((w) => [w.weekStart, w.volume]));
+  const sorted = [...weeks].sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+  const last = sorted[sorted.length - 1].weekStart;
+  const filled: { weekStart: string; volume: number }[] = [];
+  for (let week = sorted[0].weekStart; week <= last; week = shiftDayKey(week, 7)) {
+    filled.push({ weekStart: week, volume: byWeek.get(week) ?? 0 });
+  }
+  return filled;
+}
+
 // Overreaching needs a downtrending HRV; sustained high volume alone isn't it.
 // For each muscle group, compare the trailing weeks against the average of the
 // weeks before them; flag groups elevated for OVERREACH_MIN_WEEKS+ while HRV falls.
@@ -62,7 +77,8 @@ export function computeOverreaching(
   if (hrvChangePct == null || hrvChangePct >= 0) return [];
 
   const signals: OverreachingSignal[] = [];
-  for (const { muscleGroup, weeks } of volume) {
+  for (const { muscleGroup, weeks: rawWeeks } of volume) {
+    const weeks = fillCalendarWeeks(rawWeeks);
     if (weeks.length < OVERREACH_MIN_WEEKS + 1) continue;
     const baseline = weeks.slice(0, -OVERREACH_MIN_WEEKS);
     const baselineAvg = baseline.reduce((sum, w) => sum + w.volume, 0) / baseline.length;

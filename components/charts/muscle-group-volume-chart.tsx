@@ -57,9 +57,11 @@ export function MuscleGroupVolumeChart({ data }: { data: GroupVolume[] }) {
 
   const weekStarts = [...new Set(data.flatMap((g) => g.weeks.map((w) => w.weekStart)))].sort();
   const rows = weekStarts.map((weekStart) => {
-    const row: Record<string, string | number> = { weekStart };
+    // null (not 0) for an untrained week, so the line bridges the gap instead of
+    // diving to the floor and back.
+    const row: Record<string, string | number | null> = { weekStart };
     for (const g of data) {
-      row[g.muscleGroup] = g.weeks.find((w) => w.weekStart === weekStart)?.volume ?? 0;
+      row[g.muscleGroup] = g.weeks.find((w) => w.weekStart === weekStart)?.volume ?? null;
     }
     return row;
   });
@@ -87,6 +89,7 @@ export function MuscleGroupVolumeChart({ data }: { data: GroupVolume[] }) {
               stroke={COLORS[i % COLORS.length]}
               strokeWidth={2}
               dot={false}
+              connectNulls
               activeDot={{ r: 4, stroke: "var(--color-surface)", strokeWidth: 2 }}
             />
           ))}
