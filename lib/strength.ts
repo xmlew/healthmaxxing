@@ -173,3 +173,36 @@ export async function getExerciseHistory(
     rir: r.rir == null ? null : Number(r.rir),
   }));
 }
+
+export const UNTAGGED_MUSCLE_GROUP = "untagged";
+
+export type MuscleGroupWeeklyVolume = {
+  muscleGroup: string;
+  weeks: { weekStart: string; volume: number }[];
+};
+
+// Weekly training volume (sum of weight x reps) per muscle group over N days.
+// Weeks are Monday-anchored; only weeks with logged sets appear. Sets on an
+// exercise with no muscle_group fall under 'untagged'.
+export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGroupWeeklyVolume[]> {
+  const rows = await sql`
+    select
+      coalesce(e.muscle_group, ${UNTAGGED_MUSCLE_GROUP}) as muscle_group,
+      to_char(date_trunc('week', ss.session_date), 'YYYY-MM-DD') as week_start,
+      sum(coalesce(st.weight, 0) * coalesce(st.reps, 0)) as volume
+    from strength_sets st
+    join strength_sessions ss on ss.id = st.session_id
+    join exercises e on e.id = st.exercise_id
+    where ss.session_date >= (now() at time zone ${TIME_ZONE})::date - ${days}::int
+    group by 1, 2
+    order by 1, 2
+  `;
+  const byGroup = new Map<string, { weekStart: string; volume: number }[]>();
+  for (const r of rows) {
+    const group = r.muscle_group as string;
+    const weeks = byGroup.get(group) ?? [];
+    weeks.push({ weekStart: r.week_start as string, volume: Math.round(Number(r.volume)) });
+    byGroup.set(group, weeks);
+  }
+  return [...byGroup.entries()].map(([muscleGroup, weeks]) => ({ muscleGroup, weeks }));
+}

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { RecoveryChart } from "@/components/charts/recovery-chart";
+import { MuscleGroupVolumeChart } from "@/components/charts/muscle-group-volume-chart";
 import { getRecoveryAnalysis } from "@/lib/recovery";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +30,7 @@ export default async function RecoveryPage({
     : 30;
 
   const analysis = await getRecoveryAnalysis(days);
-  const { flag } = analysis;
+  const { flag, muscleGroupVolume, overreaching } = analysis;
 
   return (
     <div className="flex flex-col gap-8">
@@ -65,6 +66,37 @@ export default async function RecoveryPage({
         <h2 className="mb-2 font-display text-lg">Resting HR, HRV, and load</h2>
         <RecoveryChart data={analysis.series} energyAvailable={analysis.energyAvailable} />
       </div>
+
+      {overreaching.length > 0 ? (
+        <div className="rounded-3xl border border-warn/40 bg-warn/10 p-6">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2.5 w-2.5 rounded-full bg-warn" aria-hidden />
+            <h2 className="font-display text-lg">Possible overreaching</h2>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            HRV is trending down while these muscle groups have stayed above their usual weekly volume:
+          </p>
+          <ul className="mt-3 flex flex-col gap-1.5 text-sm">
+            {overreaching.map((o) => (
+              <li key={o.muscleGroup} className="flex items-baseline justify-between gap-4">
+                <span className="font-medium capitalize text-foreground">{o.muscleGroup}</span>
+                <span className="tabular-nums text-muted">
+                  {o.recentWeeklyVolume.toLocaleString("en-US")} vs {o.baselineWeeklyVolume.toLocaleString("en-US")} baseline
+                  {" "}({o.weeksElevated} wks)
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {muscleGroupVolume.length > 0 ? (
+        <div className="rounded-3xl border border-border bg-surface p-6">
+          <h2 className="mb-2 font-display text-lg">Weekly volume by muscle group</h2>
+          <p className="mb-3 text-xs text-muted">Sets x reps x weight per week</p>
+          <MuscleGroupVolumeChart data={muscleGroupVolume} />
+        </div>
+      ) : null}
     </div>
   );
 }
