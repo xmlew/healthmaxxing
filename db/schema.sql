@@ -77,3 +77,48 @@ create table if not exists goals (
   updated_at timestamptz not null default now(),
   constraint goals_singleton check (id = 1)
 );
+
+-- Strength training. A `strength_session` is one lifting session; its `strength_sets`
+-- are the working sets. `exercises` is a normalized reference table so a muscle group
+-- (and default unit) lives in one place rather than being repeated on every set.
+create table if not exists exercises (
+  id bigserial primary key,
+  name text not null unique,
+  muscle_group text,
+  default_unit text not null default 'kg',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists strength_sessions (
+  id bigserial primary key,
+  session_date date not null,
+  notes text,
+  workout_id text references workouts (id),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists strength_sessions_date_idx
+  on strength_sessions (session_date desc);
+
+-- At most one auto-linked session per Apple Health workout, so re-importing an
+-- export doesn't create duplicate sessions for the same "Traditional Strength
+-- Training" workout. Partial (workout_id is not null) so manual sessions are unconstrained.
+create unique index if not exists strength_sessions_workout_id_key
+  on strength_sessions (workout_id)
+  where workout_id is not null;
+
+create table if not exists strength_sets (
+  id bigserial primary key,
+  session_id bigint not null references strength_sessions (id) on delete cascade,
+  exercise_id bigint not null references exercises (id),
+  set_number integer not null,
+  weight double precision,
+  reps integer,
+  rpe double precision,
+  rir double precision,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists strength_sets_session_idx on strength_sets (session_id);
+create index if not exists strength_sets_exercise_idx
+  on strength_sets (exercise_id, created_at desc);
