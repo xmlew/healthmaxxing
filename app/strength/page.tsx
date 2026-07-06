@@ -1,13 +1,13 @@
 import { TrendLine } from "@/components/charts/trend-line";
 import {
   computeOverloadStatus,
-  estimate1RM,
   getExerciseHistory,
   listExercises,
   oneRepMaxSeries,
   type StrengthSetRow,
 } from "@/lib/strength";
 import { SetForm } from "./set-form";
+import { removeSet } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -16,10 +16,8 @@ const RECENT_SESSIONS = 4;
 
 type SessionSummary = {
   date: string;
-  topWeight: number | null;
-  topReps: number | null;
   volume: number;
-  bestEstimated1RM: number | null;
+  sets: StrengthSetRow[];
 };
 
 function summarizeSessions(sets: StrengthSetRow[]): SessionSummary[] {
@@ -30,25 +28,11 @@ function summarizeSessions(sets: StrengthSetRow[]): SessionSummary[] {
     bySession.set(s.sessionDate, list);
   }
   return [...bySession.entries()]
-    .map(([date, rows]) => {
-      const top = rows.reduce<StrengthSetRow | null>(
-        (best, r) => (r.weight != null && (best == null || r.weight > (best.weight ?? -1)) ? r : best),
-        null,
-      );
-      const volume = rows.reduce((sum, r) => sum + (r.weight ?? 0) * (r.reps ?? 0), 0);
-      const best1RM = rows.reduce<number | null>((best, r) => {
-        if (r.weight == null || r.reps == null) return best;
-        const est = estimate1RM(r.weight, r.reps);
-        return best == null || est > best ? est : best;
-      }, null);
-      return {
-        date,
-        topWeight: top?.weight ?? null,
-        topReps: top?.reps ?? null,
-        volume: Math.round(volume),
-        bestEstimated1RM: best1RM != null ? Math.round(best1RM * 10) / 10 : null,
-      };
-    })
+    .map(([date, rows]) => ({
+      date,
+      volume: Math.round(rows.reduce((sum, r) => sum + (r.weight ?? 0) * (r.reps ?? 0), 0)),
+      sets: rows,
+    }))
     .sort((a, b) => b.date.localeCompare(a.date));
 }
 
@@ -87,8 +71,8 @@ export default async function StrengthPage() {
 
       {active.length === 0 ? (
         <div className="rounded-3xl border border-border bg-surface p-8 text-center text-sm text-muted">
-          No strength sets logged yet. Log sets with the <code>log_set</code> MCP tool (e.g. from
-          Claude), or import an Apple Health &ldquo;Traditional Strength Training&rdquo; workout.
+          No strength sets logged yet. Use the form above, the <code>log_set</code> MCP tool (e.g.
+          from Claude), or import an Apple Health &ldquo;Traditional Strength Training&rdquo; workout.
         </div>
       ) : (
         active.map(({ exercise, sets, oneRm, overload }) => {
@@ -143,18 +127,36 @@ export default async function StrengthPage() {
                 <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
                   Recent sessions
                 </h3>
-                <ul className="flex flex-col divide-y divide-border">
+                <div className="flex flex-col gap-3">
                   {sessions.slice(0, RECENT_SESSIONS).map((s) => (
-                    <li key={s.date} className="flex items-center justify-between gap-3 py-2 text-sm">
-                      <span className="text-muted">{formatDate(s.date)}</span>
-                      <span className="tabular-nums">
-                        {s.topWeight != null ? `${s.topWeight} kg` : "-"}
-                        {s.topReps != null ? ` x ${s.topReps}` : ""}
-                        <span className="ml-3 text-muted">{s.volume.toLocaleString("en-US")} vol</span>
-                      </span>
-                    </li>
+                    <div key={s.date}>
+                      <div className="flex items-baseline justify-between text-xs text-muted">
+                        <span>{formatDate(s.date)}</span>
+                        <span className="tabular-nums">{s.volume.toLocaleString("en-US")} vol</span>
+                      </div>
+                      <ul className="mt-1 flex flex-col divide-y divide-border">
+                        {s.sets.map((set) => (
+                          <li key={set.setId} className="flex items-center justify-between gap-3 py-1.5 text-sm">
+                            <span className="tabular-nums">
+                              {set.weight != null ? `${set.weight} kg` : "-"}
+                              {set.reps != null ? ` x ${set.reps}` : ""}
+                              {set.rpe != null ? <span className="ml-2 text-muted">RPE {set.rpe}</span> : null}
+                            </span>
+                            <form action={removeSet.bind(null, String(set.setId))}>
+                              <button
+                                type="submit"
+                                aria-label="Delete set"
+                                className="rounded-full px-2 py-0.5 text-xs text-muted transition-colors hover:text-warn"
+                              >
+                                Remove
+                              </button>
+                            </form>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </div>
             </section>
           );

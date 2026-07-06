@@ -104,6 +104,11 @@ export async function addSet(input: {
   return Number(rows[0].id);
 }
 
+export async function deleteSet(id: string): Promise<boolean> {
+  const rows = await sql`delete from strength_sets where id = ${id} returning id`;
+  return rows.length > 0;
+}
+
 export async function nextSetNumber(sessionId: number, exerciseId: number): Promise<number> {
   const rows = await sql`
     select coalesce(max(set_number), 0) + 1 as n

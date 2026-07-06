@@ -31,6 +31,7 @@ import { PAIRINGS, type PairingKey } from "@/lib/correlation";
 import {
   addSet,
   computeOverloadStatus,
+  deleteSet,
   estimate1RM,
   getExerciseHistory,
   listExercises,
@@ -598,7 +599,7 @@ const handler = createMcpHandler(
       {
         title: "Exercise history",
         description:
-          "Sets for one exercise over N days, grouped by session, with per-set estimated 1RM, per-session total volume (sum of weight x reps), and each session's best estimated 1RM. `formula` selects the 1RM estimator (epley or brzycki).",
+          "Sets for one exercise over N days, grouped by session, with each set's `setId` (required to delete it via delete_set), estimated 1RM, per-session total volume (sum of weight x reps), and each session's best estimated 1RM. `formula` selects the 1RM estimator (epley or brzycki).",
         inputSchema: {
           exercise: z.string().min(1),
           days: z.number().int().positive().max(365).default(90),
@@ -618,6 +619,7 @@ const handler = createMcpHandler(
         }
         const sessions = [...bySession.entries()].map(([date, rows]) => {
           const setsOut = rows.map((r) => ({
+            setId: r.setId,
             setNumber: r.setNumber,
             weight: r.weight,
             reps: r.reps,
@@ -704,6 +706,16 @@ const handler = createMcpHandler(
     );
 
     server.registerTool(
+      "list_exercises",
+      {
+        title: "List exercises",
+        description:
+          "The strength exercise catalog - every exercise you've logged a set for, with its muscle group and default unit. Use to discover exercise names for get_exercise_history / get_1rm_estimate.",
+      },
+      async () => ok(await listExercises()),
+    );
+
+    server.registerTool(
       "delete_weight_log",
       {
         title: "Delete weight log",
@@ -726,6 +738,19 @@ const handler = createMcpHandler(
       async ({ id }) => {
         const removed = await deleteFoodLog(id);
         return removed ? ok({ ok: true, deletedId: id }) : fail(`No food log found with id ${id}.`);
+      }
+    );
+
+    server.registerTool(
+      "delete_set",
+      {
+        title: "Delete a strength set",
+        description: "Delete a strength set by its `setId` (from get_exercise_history).",
+        inputSchema: { id: z.string() },
+      },
+      async ({ id }) => {
+        const removed = await deleteSet(id);
+        return removed ? ok({ ok: true, deletedId: id }) : fail(`No strength set found with id ${id}.`);
       }
     );
   },
