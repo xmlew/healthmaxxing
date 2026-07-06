@@ -14,6 +14,7 @@ you manually log weight and food, and shows trends against a weight goal.
 | `/goals` | Starting/target weight, target date, daily calorie target, with a sustainable-pace check (flags if the implied kg/week is aggressive) |
 | `/workouts` | Imported workouts list + per-workout detail (duration, distance, energy, heart rate) |
 | `POST /api/ingest` | Where Health Auto Export's REST API automation posts to, protected by a bearer-token secret (`INGEST_SECRET`) |
+| `/api/mcp` | Remote MCP server exposing the same data to Claude as tools - query trends, log weight/food, manage goals - protected by `MCP_SECRET` |
 
 **Data model** (`db/schema.sql`): `health_metric_samples` (every Apple Health
 metric, generic name/unit/qty/min/avg/max + raw JSON payload),
@@ -92,6 +93,31 @@ In Health Auto Export: **Automations -> new REST API automation**.
   serverless body limit
 - **Date range**: "Since Last Sync" - sends only new data on each run
 - Schedule it however often you'd like (e.g. daily)
+
+## Querying from Claude (MCP server)
+
+The app doubles as a remote [MCP](https://modelcontextprotocol.io) server at
+`/api/mcp`, so Claude can read and update your data in conversation - *"how's my
+resting HR trending this month?"* or *"log 650 kcal for lunch"*. It's a Next.js
+route handler (`app/api/[transport]/route.ts`) that reuses the same Postgres
+queries as the dashboard, over Streamable HTTP, protected by a bearer token.
+
+Tools: `get_today_summary`, `get_trends`, `get_goal_status`, `list_workouts`,
+`get_workout_detail`, `get_recent_logs` (read); `log_weight`, `log_food`,
+`set_goal`, `delete_weight_log`, `delete_food_log` (write).
+
+Set `MCP_SECRET` in `.env.local` (`openssl rand -base64 32`), then register it
+with Claude Code:
+
+```bash
+claude mcp add --transport http health-maxxing http://localhost:3000/api/mcp \
+  --header "Authorization: Bearer <your MCP_SECRET>"
+```
+
+Check the connection with `/mcp` inside a session. Using it from **Claude.ai**
+as a custom connector instead requires the server to be reachable over public
+HTTPS (localhost only works for Claude Code, or expose it through a tunnel);
+deploying it publicly isn't set up yet.
 
 ## Current status
 
