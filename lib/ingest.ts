@@ -1,4 +1,9 @@
 import type { Sql } from "postgres";
+import { TIME_ZONE } from "./time";
+
+// Apple Health's generic strength workout. Ingesting one links a strength_sessions
+// shell to it so sets can be attached later; other workout names are untouched.
+const STRENGTH_WORKOUT_NAME = "Traditional Strength Training";
 
 type MetricRecord = Record<string, unknown> & {
   date?: string;
@@ -142,6 +147,19 @@ export async function ingestWorkouts(sql: Sql, workouts: WorkoutRecord[]): Promi
         step_count = excluded.step_count,
         payload = excluded.payload
     `;
+
+    // Link a strength session to Apple Health's strength workout. Idempotent via
+    // the partial unique index on workout_id, so re-imports don't duplicate.
+    if (workout.name === STRENGTH_WORKOUT_NAME && workout.start) {
+      await sql`
+        insert into strength_sessions (session_date, workout_id)
+        select (${workout.start}::timestamptz at time zone ${TIME_ZONE})::date, ${id}
+        where not exists (
+          select 1 from strength_sessions where workout_id = ${id}
+        )
+      `;
+    }
+
     count++;
   }
   return count;
