@@ -8,8 +8,11 @@ you manually log weight and food, and shows trends against a weight goal.
 
 | Route | What it does |
 |---|---|
-| `/` | Today's steps, active/basal energy, sleep, resting HR, calories in vs. out, and progress toward your weight goal |
+| `/` | Today's steps, active/basal energy, sleep, resting HR, calories in vs. out, and progress toward your weight goal - plus a banner when resting HR spikes above its 30-day baseline |
 | `/trends` | Weight vs. goal, calories in vs. out, steps, sleep, resting heart rate, and HRV over 7/30/90 days |
+| `/recovery` | Resting HR and HRV overlaid on daily training load over 7/30/90 days, with an overtraining flag when recovery worsens under recent elevated load |
+| `/tdee` | Estimated TDEE (active + basal energy) vs. logged calories: daily and rolling net balance, cumulative deficit/surplus, and implied weight change |
+| `/correlations` | Pearson correlation for curated daily-series pairings (sleep vs. next-day resting HR, steps vs. weight-loss rate), with a "not enough data" guard when paired points are too few |
 | `/log` | Manual weight and food entries, with delete |
 | `/goals` | Starting/target weight, target date, daily calorie target, with a sustainable-pace check (flags if the implied kg/week is aggressive) |
 | `/workouts` | Imported workouts list + per-workout detail (duration, distance, energy, heart rate) |
