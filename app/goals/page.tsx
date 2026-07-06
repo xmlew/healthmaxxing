@@ -1,7 +1,15 @@
 import { getGoal, getLatestWeight } from "@/lib/queries";
+import { asGoalPhase, evaluatePace, GOAL_PHASES } from "@/lib/goals";
 import { saveGoal } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+const PHASE_LABELS: Record<(typeof GOAL_PHASES)[number], string> = {
+  cut: "Cut (lose fat)",
+  bulk: "Bulk (build muscle)",
+  recomp: "Recomp (hold weight)",
+  maintenance: "Maintenance",
+};
 
 function toDateInputValue(value: string | Date | null): string {
   if (!value) return "";
@@ -16,23 +24,16 @@ export default async function GoalsPage() {
   const targetWeight = goal?.target_weight_kg != null ? Number(goal.target_weight_kg) : null;
   const targetDate = goal?.target_date ?? null;
   const startingDate = goal?.starting_date ?? null;
+  const phase = asGoalPhase(goal?.phase);
 
-  let paceNote: string | null = null;
-  if (startingWeight != null && targetWeight != null && targetDate && startingDate) {
-    const weeks = Math.max(
-      1 / 7,
-      (new Date(targetDate).getTime() - new Date(startingDate).getTime()) / (1000 * 60 * 60 * 24 * 7)
-    );
-    const perWeek = (startingWeight - targetWeight) / weeks;
-    if (perWeek > 0) {
-      paceNote =
-        perWeek > 1
-          ? `That's about ${perWeek.toFixed(2)} kg/week - faster than the commonly recommended 0.5-1 kg/week pace.`
-          : `About ${perWeek.toFixed(2)} kg/week - within a typically sustainable range.`;
-    } else if (perWeek < 0) {
-      paceNote = "Target weight is above your starting weight - this is set up as a gain goal.";
-    }
-  }
+  const pace = evaluatePace({
+    phase,
+    startingWeightKg: startingWeight,
+    targetWeightKg: targetWeight,
+    startingDate,
+    targetDate,
+  });
+  const paceIsWarning = pace.status === "too-fast" || pace.status === "wrong-direction";
 
   return (
     <div className="flex flex-col gap-8">
@@ -46,6 +47,20 @@ export default async function GoalsPage() {
       </header>
 
       <form action={saveGoal} className="flex max-w-md flex-col gap-4 rounded-3xl border border-border bg-surface p-6">
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span className="text-muted">Phase</span>
+          <select
+            name="phase"
+            defaultValue={phase}
+            className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
+          >
+            {GOAL_PHASES.map((p) => (
+              <option key={p} value={p}>
+                {PHASE_LABELS[p]}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="grid grid-cols-2 gap-4">
           <label className="flex flex-col gap-1.5 text-sm">
             <span className="text-muted">Starting weight (kg)</span>
@@ -108,8 +123,8 @@ export default async function GoalsPage() {
         </button>
       </form>
 
-      {paceNote ? (
-        <p className="max-w-md text-sm text-muted">{paceNote}</p>
+      {pace.note ? (
+        <p className={`max-w-md text-sm ${paceIsWarning ? "text-warn" : "text-muted"}`}>{pace.note}</p>
       ) : null}
     </div>
   );

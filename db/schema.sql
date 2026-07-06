@@ -78,6 +78,19 @@ create table if not exists goals (
   constraint goals_singleton check (id = 1)
 );
 
+-- Training phase drives the direction of the pace check: a cut expects loss, a
+-- bulk expects controlled gain, recomp/maintenance expect roughly stable weight.
+-- Added post-hoc via alter + a guarded constraint so re-running stays idempotent.
+alter table goals add column if not exists phase text not null default 'maintenance';
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'goals_phase_check') then
+    alter table goals add constraint goals_phase_check
+      check (phase in ('cut', 'bulk', 'recomp', 'maintenance'));
+  end if;
+end $$;
+
 -- Strength training. A `strength_session` is one lifting session; its `strength_sets`
 -- are the working sets. `exercises` is a normalized reference table so a muscle group
 -- (and default unit) lives in one place rather than being repeated on every set.
