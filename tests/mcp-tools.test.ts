@@ -2,12 +2,17 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import dotenv from "dotenv";
+import postgres from "postgres";
 
 dotenv.config({ path: ".env.local" });
 
 const PORT = 3130;
 const BASE = `http://localhost:${PORT}`;
 const SECRET = process.env.MCP_SECRET;
+
+// Sentinel exercise the strength round-trip test writes; cleaned up in after().
+const STRENGTH_TEST_EXERCISE = "__mcp_test_lift__";
+let strengthTestSessionId: number | null = null;
 
 let server: ChildProcess;
 
@@ -72,13 +77,65 @@ after(() => {
   server?.kill("SIGTERM");
 });
 
+// Remove the sentinel exercise/set/session the strength round-trip test wrote,
+// by exact match, so the shared dev DB is left as it was found.
+after(async () => {
+  const url = process.env.DATABASE_URL;
+  if (!url) return;
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`delete from strength_sets where exercise_id in (select id from exercises where name = ${STRENGTH_TEST_EXERCISE})`;
+    await sql`delete from exercises where name = ${STRENGTH_TEST_EXERCISE}`;
+    // Only the exact session this test created, and only if it's now empty -
+    // never other empty manual sessions on the shared DB.
+    if (strengthTestSessionId != null) {
+      await sql`
+        delete from strength_sessions
+        where id = ${strengthTestSessionId}
+          and workout_id is null
+          and id not in (select session_id from strength_sets)
+      `;
+    }
+  } finally {
+    await sql.end();
+  }
+});
+
 test("tools/list exposes the four new analysis tools", async () => {
   const { body } = await rpc("tools/list", {});
   const names: string[] = body.result.tools.map((t: { name: string }) => t.name);
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(body.result.tools.length, 15, "expected 15 tools total (11 existing + 4 new)");
+  assert.equal(body.result.tools.length, 18, "expected 18 tools total (15 prior + 3 strength)");
+});
+
+test("strength tools are registered and round-trip a logged set", async () => {
+  const { body } = await rpc("tools/list", {});
+  const names: string[] = body.result.tools.map((t: { name: string }) => t.name);
+  for (const expected of ["log_set", "get_exercise_history", "get_1rm_estimate"]) {
+    assert.ok(names.includes(expected), `tools/list missing ${expected}`);
+  }
+
+  const logged = await callTool("log_set", {
+    exercise: STRENGTH_TEST_EXERCISE,
+    reps: 5,
+    weight: 100,
+    muscle_group: "push",
+  });
+  assert.equal(logged.ok, true, "log_set should succeed");
+  assert.ok(logged.setId, "log_set returns a setId");
+  strengthTestSessionId = logged.sessionId;
+  // Epley: 100 * (1 + 5/30) = 116.7
+  assert.equal(logged.estimated1RM, 116.7, "log_set echoes the estimated 1RM");
+
+  const history = await callTool("get_exercise_history", { exercise: STRENGTH_TEST_EXERCISE });
+  assert.ok(Array.isArray(history.sessions) && history.sessions.length >= 1, "history has a session");
+  assert.equal(history.sessions[0].volume, 500, "session volume is weight*reps (100*5)");
+
+  const oneRm = await callTool("get_1rm_estimate", { exercise: STRENGTH_TEST_EXERCISE, formula: "brzycki" });
+  // Brzycki: 100 * 36/(37-5) = 112.5
+  assert.equal(oneRm.current, 112.5, "get_1rm_estimate uses the requested formula");
 });
 
 test("get_recovery returns a recovery analysis shape", async () => {
