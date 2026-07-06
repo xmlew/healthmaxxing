@@ -62,10 +62,12 @@ export default async function TrendsPage({
     .map(([date, v]) => ({ date, in: v.in, out: v.out }));
 
   // Split each weigh-in that carries a body-fat reading into lean vs fat mass.
+  // Clamp body fat to 0-100 so a bad reading can't yield negative lean mass.
   const bodyCompositionData = weight
     .filter((w) => w.bodyFatPct != null)
     .map((w) => {
-      const fat = (w.weightKg * (w.bodyFatPct as number)) / 100;
+      const bodyFatPct = Math.min(100, Math.max(0, w.bodyFatPct as number));
+      const fat = (w.weightKg * bodyFatPct) / 100;
       return { date: w.date.toISOString(), lean: w.weightKg - fat, fat };
     });
 

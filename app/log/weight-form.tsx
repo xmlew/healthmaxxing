@@ -42,6 +42,8 @@ export function WeightForm() {
             name="bodyFatPct"
             type="number"
             step="0.1"
+            min="0"
+            max="100"
             inputMode="decimal"
             placeholder="18.5"
             className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"

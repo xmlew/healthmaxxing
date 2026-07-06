@@ -347,7 +347,14 @@ const handler = createMcpHandler(
           waistCm: waist_cm ?? null,
           note: null,
         });
-        return ok({ ok: true, loggedAt: at.iso, weightKg: kg, bodyFatPct: body_fat_pct ?? null });
+        return ok({
+          ok: true,
+          loggedAt: at.iso,
+          weightKg: kg,
+          bodyFatPct: body_fat_pct ?? null,
+          skeletalMuscleMassKg: skeletal_muscle_mass_kg ?? null,
+          waistCm: waist_cm ?? null,
+        });
       }
     );
 
