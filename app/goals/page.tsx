@@ -105,16 +105,30 @@ export default async function GoalsPage() {
             />
           </label>
         </div>
-        <label className="flex flex-col gap-1.5 text-sm">
-          <span className="text-muted">Daily calorie target (optional)</span>
-          <input
-            name="dailyCalorieTarget"
-            type="number"
-            inputMode="numeric"
-            defaultValue={goal?.daily_calorie_target ?? ""}
-            className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
-          />
-        </label>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-muted">Daily calorie target (optional)</span>
+            <input
+              name="dailyCalorieTarget"
+              type="number"
+              inputMode="numeric"
+              defaultValue={goal?.daily_calorie_target ?? ""}
+              className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-muted">Daily protein target g (optional)</span>
+            <input
+              name="dailyProteinTarget"
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="150"
+              defaultValue={goal?.daily_protein_target ?? ""}
+              className="rounded-xl border border-border bg-background px-3 py-2.5 outline-none focus:border-accent"
+            />
+          </label>
+        </div>
         <button
           type="submit"
           className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-90"

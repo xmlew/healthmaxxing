@@ -35,6 +35,10 @@ export default async function DashboardPage() {
   const caloriesIn = foodToday.calories;
   const balance = caloriesIn - caloriesOut;
 
+  const proteinToday = foodToday.proteinG;
+  const proteinTarget = goal?.daily_protein_target != null ? Number(goal.daily_protein_target) : null;
+  const underProtein = proteinTarget != null && proteinTarget > 0 && proteinToday < proteinTarget;
+
   const weightKg = weight ? Number(weight.weight_kg) : null;
   const startWeight = goal?.starting_weight_kg ? Number(goal.starting_weight_kg) : null;
   const targetWeight = goal?.target_weight_kg ? Number(goal.target_weight_kg) : null;
@@ -90,6 +94,24 @@ export default async function DashboardPage() {
         </section>
       ) : null}
 
+      {underProtein ? (
+        <div className="rise-in flex items-start gap-4 rounded-3xl border border-warn/40 bg-warn/10 p-5">
+          <span
+            aria-hidden
+            className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-warn/20 font-display text-warn"
+          >
+            !
+          </span>
+          <div className="min-w-0">
+            <p className="font-medium text-warn">Under protein target</p>
+            <p className="mt-1 text-sm text-foreground">
+              {fmt(proteinToday)} g so far today, {fmt(proteinTarget as number)} g target -{" "}
+              {fmt((proteinTarget as number) - proteinToday)} g to go.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <section className="rise-in rounded-3xl border border-border bg-surface p-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -140,6 +162,12 @@ export default async function DashboardPage() {
               value={fmt(Math.abs(balance))}
               unit="kcal"
               caption={balance <= 0 ? "on track" : "over burn"}
+            />
+            <StatTile
+              label="Protein"
+              value={fmt(proteinToday)}
+              unit="g"
+              caption={proteinTarget != null ? `of ${fmt(proteinTarget)} g` : undefined}
             />
           </div>
         </div>

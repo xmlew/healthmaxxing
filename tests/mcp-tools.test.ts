@@ -78,7 +78,15 @@ test("tools/list exposes the four new analysis tools", async () => {
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(body.result.tools.length, 15, "expected 15 tools total (11 existing + 4 new)");
+  assert.equal(body.result.tools.length, 16, "expected 16 tools total (15 prior + get_macro_summary)");
+});
+
+test("get_macro_summary returns per-day macros and targets", async () => {
+  const data = await callTool("get_macro_summary", { days: 7 });
+  assert.equal(data.days, 7);
+  assert.ok("proteinTargetG" in data, "proteinTargetG present");
+  assert.ok("calorieTarget" in data, "calorieTarget present");
+  assert.ok(Array.isArray(data.series), "series is an array");
 });
 
 test("get_recovery returns a recovery analysis shape", async () => {
