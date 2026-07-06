@@ -36,7 +36,7 @@ export async function upsertExercise(input: {
   const rows = await sql`
     insert into exercises (name, muscle_group, default_unit)
     values (${input.name}, ${input.muscleGroup ?? null}, ${input.defaultUnit ?? "kg"})
-    on conflict (name) do update set
+    on conflict (lower(name)) do update set
       muscle_group = coalesce(${input.muscleGroup ?? null}, exercises.muscle_group),
       default_unit = coalesce(${input.defaultUnit ?? null}, exercises.default_unit)
     returning id

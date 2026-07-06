@@ -83,11 +83,18 @@ create table if not exists goals (
 -- (and default unit) lives in one place rather than being repeated on every set.
 create table if not exists exercises (
   id bigserial primary key,
-  name text not null unique,
+  name text not null,
   muscle_group text,
   default_unit text not null default 'kg',
   created_at timestamptz not null default now()
 );
+
+-- Dedupe exercise names case-insensitively so the write path (upsert) and the
+-- read path (getExerciseHistory matches on lower(name)) agree - otherwise "Bench"
+-- and "bench" become two rows on write but merge on read. Drop the original
+-- case-sensitive unique so re-running transitions an already-migrated database.
+alter table exercises drop constraint if exists exercises_name_key;
+create unique index if not exists exercises_name_lower_key on exercises (lower(name));
 
 create table if not exists strength_sessions (
   id bigserial primary key,
