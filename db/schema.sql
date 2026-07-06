@@ -98,6 +98,10 @@ begin
   end if;
 end $$;
 
+-- Daily protein target (grams). For muscle building this is the macro that
+-- matters most, so it sits alongside the calorie target.
+alter table goals add column if not exists daily_protein_target double precision;
+
 -- Strength training. A `strength_session` is one lifting session; its `strength_sets`
 -- are the working sets. `exercises` is a normalized reference table so a muscle group
 -- (and default unit) lives in one place rather than being repeated on every set.

@@ -80,6 +80,7 @@ export default async function LogPage() {
                     <p>{log.description}</p>
                     <p className="text-xs text-muted">
                       {formatWhen(log.logged_at)} &middot; {Math.round(Number(log.calories))} kcal
+                      {log.protein_g != null ? ` · ${Math.round(Number(log.protein_g))}g protein` : ""}
                       {log.meal ? ` · ${log.meal}` : ""}
                     </p>
                   </div>

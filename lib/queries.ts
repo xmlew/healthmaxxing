@@ -87,17 +87,19 @@ export async function upsertGoal(input: {
   targetWeightKg: number | null;
   targetDate: string | null;
   dailyCalorieTarget: number | null;
+  dailyProteinTarget: number | null;
   phase: GoalPhase;
 }) {
   await sql`
-    insert into goals (id, starting_weight_kg, starting_date, target_weight_kg, target_date, daily_calorie_target, phase, updated_at)
-    values (1, ${input.startingWeightKg}, ${input.startingDate}, ${input.targetWeightKg}, ${input.targetDate}, ${input.dailyCalorieTarget}, ${input.phase}, now())
+    insert into goals (id, starting_weight_kg, starting_date, target_weight_kg, target_date, daily_calorie_target, daily_protein_target, phase, updated_at)
+    values (1, ${input.startingWeightKg}, ${input.startingDate}, ${input.targetWeightKg}, ${input.targetDate}, ${input.dailyCalorieTarget}, ${input.dailyProteinTarget}, ${input.phase}, now())
     on conflict (id) do update set
       starting_weight_kg = excluded.starting_weight_kg,
       starting_date = excluded.starting_date,
       target_weight_kg = excluded.target_weight_kg,
       target_date = excluded.target_date,
       daily_calorie_target = excluded.daily_calorie_target,
+      daily_protein_target = excluded.daily_protein_target,
       phase = excluded.phase,
       updated_at = now()
   `;
@@ -140,11 +142,22 @@ export async function addFoodLog(input: {
 
 export async function getTodayFoodTotal() {
   const rows = await sql`
-    select coalesce(sum(calories), 0) as total, count(*) as entries
+    select
+      coalesce(sum(calories), 0) as total,
+      coalesce(sum(protein_g), 0) as protein,
+      coalesce(sum(carbs_g), 0) as carbs,
+      coalesce(sum(fat_g), 0) as fat,
+      count(*) as entries
     from food_logs
     where logged_at >= ${todayStart()} and logged_at < ${todayEnd()}
   `;
-  return { calories: Number(rows[0]?.total ?? 0), entries: Number(rows[0]?.entries ?? 0) };
+  return {
+    calories: Number(rows[0]?.total ?? 0),
+    proteinG: Number(rows[0]?.protein ?? 0),
+    carbsG: Number(rows[0]?.carbs ?? 0),
+    fatG: Number(rows[0]?.fat ?? 0),
+    entries: Number(rows[0]?.entries ?? 0),
+  };
 }
 
 export async function getRecentWeightLogs(limit: number) {
@@ -158,11 +171,33 @@ export async function getRecentWeightLogs(limit: number) {
 
 export async function getRecentFoodLogs(limit: number) {
   return sql`
-    select id, logged_at, description, calories, meal
+    select id, logged_at, description, calories, protein_g, carbs_g, fat_g, meal
     from food_logs
     order by logged_at desc
     limit ${limit}
   `;
+}
+
+export async function getMacroDailyTotals(days: number) {
+  const rows = await sql`
+    select
+      date_trunc('day', logged_at at time zone ${TIME_ZONE}) as day,
+      sum(calories) as calories,
+      sum(protein_g) as protein,
+      sum(carbs_g) as carbs,
+      sum(fat_g) as fat
+    from food_logs
+    where logged_at >= now() - (${days} || ' days')::interval
+    group by 1
+    order by 1 asc
+  `;
+  return rows.map((r) => ({
+    date: r.day as Date,
+    calories: Number(r.calories ?? 0),
+    proteinG: r.protein == null ? null : Number(r.protein),
+    carbsG: r.carbs == null ? null : Number(r.carbs),
+    fatG: r.fat == null ? null : Number(r.fat),
+  }));
 }
 
 export async function deleteWeightLog(id: string) {

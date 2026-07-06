@@ -10,6 +10,7 @@ import {
   getFoodDailyTotals,
   getGoal,
   getLatestMetric,
+  getMacroDailyTotals,
   getLatestWeight,
   getMetricSeries,
   getRecentFoodLogs,
@@ -216,6 +217,7 @@ const handler = createMcpHandler(
           targetWeightKg: targetWeight,
           targetDate: dateStr(goal.target_date),
           dailyCalorieTarget: goal.daily_calorie_target != null ? Number(goal.daily_calorie_target) : null,
+          dailyProteinTarget: goal.daily_protein_target != null ? Number(goal.daily_protein_target) : null,
           latestWeightKg: latest,
           progressPct: progress != null ? Math.round(progress * 100) : null,
           paceStatus: pace.status,
@@ -319,6 +321,9 @@ const handler = createMcpHandler(
             loggedAt: r.logged_at,
             description: r.description,
             calories: numOrNull(r.calories),
+            proteinG: numOrNull(r.protein_g),
+            carbsG: numOrNull(r.carbs_g),
+            fatG: numOrNull(r.fat_g),
             meal: r.meal,
           }))
         );
@@ -405,6 +410,7 @@ const handler = createMcpHandler(
           targetWeightKg: z.number().finite().positive().optional(),
           targetDate: z.string().optional(),
           dailyCalorieTarget: z.number().finite().nonnegative().optional(),
+          dailyProteinTarget: z.number().finite().nonnegative().optional(),
           phase: z.enum(GOAL_PHASES).optional(),
         },
       },
@@ -431,6 +437,9 @@ const handler = createMcpHandler(
           dailyCalorieTarget:
             input.dailyCalorieTarget ??
             (existing?.daily_calorie_target != null ? Number(existing.daily_calorie_target) : null),
+          dailyProteinTarget:
+            input.dailyProteinTarget ??
+            (existing?.daily_protein_target != null ? Number(existing.daily_protein_target) : null),
           phase: input.phase ?? asGoalPhase(existing?.phase),
         };
         await upsertGoal(merged);
@@ -503,6 +512,36 @@ const handler = createMcpHandler(
           })),
         );
       },
+    );
+
+    server.registerTool(
+      "get_macro_summary",
+      {
+        title: "Macro summary",
+        description:
+          "Daily protein/carbs/fat/calorie totals from logged food over N days, plus the goal's daily protein and calorie targets. For each day, proteinMet is whether that day reached the protein target. Protein is the macro that matters most for muscle building.",
+        inputSchema: {
+          days: z.number().int().positive().max(365).default(7),
+        },
+      },
+      async ({ days }) => {
+        const [daily, goal] = await Promise.all([getMacroDailyTotals(days), getGoal()]);
+        const proteinTarget = goal?.daily_protein_target != null ? Number(goal.daily_protein_target) : null;
+        const calorieTarget = goal?.daily_calorie_target != null ? Number(goal.daily_calorie_target) : null;
+        return ok({
+          days,
+          proteinTargetG: proteinTarget,
+          calorieTarget,
+          series: daily.map((d) => ({
+            date: d.date.toISOString().slice(0, 10),
+            calories: Math.round(d.calories),
+            proteinG: d.proteinG != null ? round1(d.proteinG) : null,
+            carbsG: d.carbsG != null ? round1(d.carbsG) : null,
+            fatG: d.fatG != null ? round1(d.fatG) : null,
+            proteinMet: proteinTarget != null && d.proteinG != null ? d.proteinG >= proteinTarget : null,
+          })),
+        });
+      }
     );
 
     server.registerTool(

@@ -23,6 +23,7 @@ export async function saveGoal(formData: FormData) {
     targetWeightKg: num(formData, "targetWeightKg"),
     targetDate: str(formData, "targetDate"),
     dailyCalorieTarget: num(formData, "dailyCalorieTarget"),
+    dailyProteinTarget: num(formData, "dailyProteinTarget"),
     phase: asGoalPhase(formData.get("phase")),
   });
 
