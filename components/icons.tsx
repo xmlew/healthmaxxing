@@ -19,6 +19,14 @@ export function HomeIcon({ className }: IconProps) {
   );
 }
 
+export function StrengthIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M4 9v6M7 7v10M17 7v10M20 9v6M7 12h10" />
+    </svg>
+  );
+}
+
 export function TrendIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className}>
