@@ -45,11 +45,11 @@ export function WorkoutIcon({ className }: IconProps) {
   );
 }
 
-export function TdeeIcon({ className }: IconProps) {
+export function RecoveryIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className}>
-      <path d="M12 3c1.5 3 4.5 4.5 4.5 8.5A4.5 4.5 0 0 1 12 16a4.5 4.5 0 0 1-4.5-4.5C7.5 9 9 7 12 3Z" />
-      <path d="M12 21a3 3 0 0 0 3-3c0-1.8-1.5-2.5-3-4.5-1.5 2-3 2.7-3 4.5a3 3 0 0 0 3 3Z" />
+      <path d="M20.5 8.5c0-2.2-1.7-4-3.9-4-1.5 0-2.8.8-3.5 2-.7-1.2-2-2-3.5-2-2.2 0-3.9 1.8-3.9 4 0 4.2 5.1 7.9 7.4 9.3 2.3-1.4 7.4-5.1 7.4-9.3Z" />
+      <path d="M3 12.5h3.2l1.6-3 2.4 6 1.6-3H16" />
     </svg>
   );
 }

@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GoalIcon, HomeIcon, LogIcon, TdeeIcon, TrendIcon, WorkoutIcon } from "./icons";
+import { GoalIcon, HomeIcon, LogIcon, RecoveryIcon, TrendIcon, WorkoutIcon } from "./icons";
 
 const ITEMS = [
   { href: "/", label: "Home", Icon: HomeIcon },
   { href: "/trends", label: "Trends", Icon: TrendIcon },
-  { href: "/tdee", label: "TDEE", Icon: TdeeIcon },
+  { href: "/recovery", label: "Recovery", Icon: RecoveryIcon },
   { href: "/log", label: "Log", Icon: LogIcon },
   { href: "/workouts", label: "Workouts", Icon: WorkoutIcon },
   { href: "/goals", label: "Goal", Icon: GoalIcon },

@@ -196,3 +196,30 @@ export async function getWorkoutById(id: string) {
   const rows = await sql`select * from workouts where id = ${id}`;
   return rows[0] ?? null;
 }
+
+export type WorkoutDailyLoad = {
+  day: string;
+  activeEnergyKj: number | null;
+  durationMin: number;
+  workoutCount: number;
+};
+
+export async function getWorkoutDailyLoad(days: number): Promise<WorkoutDailyLoad[]> {
+  const rows = await sql`
+    select
+      to_char(date_trunc('day', start_time at time zone ${TIME_ZONE}), 'YYYY-MM-DD') as day,
+      sum(active_energy_kj) as active_energy_kj,
+      coalesce(sum(duration_min), 0) as duration_min,
+      count(*)::int as workout_count
+    from workouts
+    where start_time >= now() - (${days} || ' days')::interval
+    group by 1
+    order by 1 asc
+  `;
+  return rows.map((r) => ({
+    day: r.day as string,
+    activeEnergyKj: r.active_energy_kj == null ? null : Number(r.active_energy_kj),
+    durationMin: Number(r.duration_min),
+    workoutCount: Number(r.workout_count),
+  }));
+}
