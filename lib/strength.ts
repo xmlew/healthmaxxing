@@ -104,6 +104,45 @@ export async function addSet(input: {
   return Number(rows[0].id);
 }
 
+export async function nextSetNumber(sessionId: number, exerciseId: number): Promise<number> {
+  const rows = await sql`
+    select coalesce(max(set_number), 0) + 1 as n
+    from strength_sets
+    where session_id = ${sessionId} and exercise_id = ${exerciseId}
+  `;
+  return Number(rows[0].n);
+}
+
+export const ONE_RM_FORMULAS = ["epley", "brzycki"] as const;
+export type OneRepMaxFormula = (typeof ONE_RM_FORMULAS)[number];
+
+// Estimated one-rep max from a working set. Epley: w*(1+reps/30);
+// Brzycki: w*36/(37-reps). A single rep is its own 1RM; both formulas break
+// down as reps approach Brzycki's asymptote, so clamp very high reps to the weight.
+export function estimate1RM(weight: number, reps: number, formula: OneRepMaxFormula = "epley"): number {
+  if (reps <= 1) return weight;
+  if (formula === "brzycki") {
+    if (reps >= 37) return weight;
+    return (weight * 36) / (37 - reps);
+  }
+  return weight * (1 + reps / 30);
+}
+
+export type OneRepMaxPoint = { date: string; oneRepMax: number };
+
+// Best estimated 1RM per session date, ascending - the series a 1RM chart plots.
+export function oneRepMaxSeries(sets: StrengthSetRow[], formula: OneRepMaxFormula): OneRepMaxPoint[] {
+  const byDate = new Map<string, number>();
+  for (const s of sets) {
+    if (s.weight == null || s.reps == null) continue;
+    const est = estimate1RM(s.weight, s.reps, formula);
+    byDate.set(s.sessionDate, Math.max(byDate.get(s.sessionDate) ?? 0, est));
+  }
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, oneRepMax]) => ({ date, oneRepMax: Math.round(oneRepMax * 10) / 10 }));
+}
+
 export async function getExerciseHistory(
   exerciseName: string,
   days: number,
