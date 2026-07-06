@@ -1,5 +1,6 @@
 import { sql } from "./db";
 import { TIME_ZONE } from "./time";
+import type { GoalPhase } from "./goals";
 import {
   correlate,
   weightLossRateSeries,
@@ -82,7 +83,7 @@ export async function upsertGoal(input: {
   targetWeightKg: number | null;
   targetDate: string | null;
   dailyCalorieTarget: number | null;
-  phase: string;
+  phase: GoalPhase;
 }) {
   await sql`
     insert into goals (id, starting_weight_kg, starting_date, target_weight_kg, target_date, daily_calorie_target, phase, updated_at)
