@@ -8,6 +8,7 @@ import {
   HomeIcon,
   LogIcon,
   RecoveryIcon,
+  StrengthIcon,
   TdeeIcon,
   TrendIcon,
   WorkoutIcon,
@@ -17,6 +18,7 @@ const ITEMS = [
   { href: "/", label: "Home", Icon: HomeIcon },
   { href: "/trends", label: "Trends", Icon: TrendIcon },
   { href: "/recovery", label: "Recovery", Icon: RecoveryIcon },
+  { href: "/strength", label: "Strength", Icon: StrengthIcon },
   { href: "/tdee", label: "TDEE", Icon: TdeeIcon },
   { href: "/correlations", label: "Correlate", Icon: CorrelationIcon },
   { href: "/log", label: "Log", Icon: LogIcon },
@@ -37,9 +39,9 @@ export function BottomNav() {
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 backdrop-blur md:hidden">
-      <div className="relative mx-auto grid max-w-lg grid-cols-8 px-2 pb-[calc(env(safe-area-inset-bottom))] pt-1">
+      <div className="relative mx-auto grid max-w-lg grid-cols-9 px-2 pb-[calc(env(safe-area-inset-bottom))] pt-1">
         <span
-          className="absolute inset-y-1 w-[12.5%] rounded-2xl bg-surface-raised transition-transform duration-300 ease-out"
+          className="absolute inset-y-1 w-[11.1111%] rounded-2xl bg-surface-raised transition-transform duration-300 ease-out"
           style={{ transform: `translateX(${index * 100}%)` }}
           aria-hidden
         />
