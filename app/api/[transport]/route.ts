@@ -24,6 +24,7 @@ import {
 } from "@/lib/queries";
 import { getRecoveryAnalysis } from "@/lib/recovery";
 import { getTdeeAnalysis } from "@/lib/tdee";
+import { asGoalPhase, evaluatePace, GOAL_PHASES } from "@/lib/goals";
 import { evaluateAnomalies } from "@/lib/anomalies";
 import { PAIRINGS, type PairingKey } from "@/lib/correlation";
 import { kjToKcal, TIME_ZONE } from "@/lib/time";
@@ -31,7 +32,6 @@ import { kjToKcal, TIME_ZONE } from "@/lib/time";
 const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]];
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
-const round2 = (n: number) => Math.round(n * 100) / 100;
 const numOrNull = (v: unknown) => (v == null ? null : Number(v));
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
@@ -174,7 +174,7 @@ const handler = createMcpHandler(
       {
         title: "Goal status",
         description:
-          "Current weight goal with progress toward it (using the latest logged weight) and a sustainable-pace check that flags implied loss faster than the recommended 0.5-1 kg/week.",
+          "Current goal with its training phase, progress toward it (using the latest logged weight), and a phase-aware pace check. A cut flags loss faster than 0.5-1 kg/week; a bulk flags gain faster than ~0.5% bodyweight/week; recomp/maintenance flag notable drift from stable. kgPerWeek is signed: positive = gaining, negative = losing.",
       },
       async () => {
         const [goal, latestWeight] = await Promise.all([getGoal(), getLatestWeight()]);
@@ -183,33 +183,23 @@ const handler = createMcpHandler(
         const startingWeight = goal.starting_weight_kg != null ? Number(goal.starting_weight_kg) : null;
         const targetWeight = goal.target_weight_kg != null ? Number(goal.target_weight_kg) : null;
         const latest = latestWeight ? Number(latestWeight.weight_kg) : null;
+        const phase = asGoalPhase(goal.phase);
         const progress =
           latest != null && startingWeight != null && targetWeight != null && startingWeight !== targetWeight
             ? clamp01((startingWeight - latest) / (startingWeight - targetWeight))
             : null;
 
-        // Pace check mirrors app/goals/page.tsx:20-35.
-        let kgPerWeek: number | null = null;
-        let paceNote: string | null = null;
-        if (startingWeight != null && targetWeight != null && goal.target_date && goal.starting_date) {
-          const weeks = Math.max(
-            1 / 7,
-            (new Date(goal.target_date).getTime() - new Date(goal.starting_date).getTime()) /
-              (1000 * 60 * 60 * 24 * 7)
-          );
-          kgPerWeek = (startingWeight - targetWeight) / weeks;
-          if (kgPerWeek > 0) {
-            paceNote =
-              kgPerWeek > 1
-                ? `About ${kgPerWeek.toFixed(2)} kg/week - faster than the commonly recommended 0.5-1 kg/week pace.`
-                : `About ${kgPerWeek.toFixed(2)} kg/week - within a typically sustainable range.`;
-          } else if (kgPerWeek < 0) {
-            paceNote = "Target weight is above your starting weight - this is set up as a gain goal.";
-          }
-        }
+        const pace = evaluatePace({
+          phase,
+          startingWeightKg: startingWeight,
+          targetWeightKg: targetWeight,
+          startingDate: goal.starting_date,
+          targetDate: goal.target_date,
+        });
 
         return ok({
           goalSet: true,
+          phase,
           startingWeightKg: startingWeight,
           startingDate: dateStr(goal.starting_date),
           targetWeightKg: targetWeight,
@@ -217,8 +207,10 @@ const handler = createMcpHandler(
           dailyCalorieTarget: goal.daily_calorie_target != null ? Number(goal.daily_calorie_target) : null,
           latestWeightKg: latest,
           progressPct: progress != null ? Math.round(progress * 100) : null,
-          kgPerWeek: kgPerWeek != null ? round2(kgPerWeek) : null,
-          paceNote,
+          paceStatus: pace.status,
+          kgPerWeek: pace.kgPerWeek,
+          pctPerWeek: pace.pctPerWeek,
+          paceNote: pace.note,
         });
       }
     );
@@ -378,13 +370,14 @@ const handler = createMcpHandler(
       {
         title: "Set goal",
         description:
-          "Update the weight goal. Only the fields you provide change; omitted fields keep their current values. Dates are YYYY-MM-DD.",
+          "Update the goal. Only the fields you provide change; omitted fields keep their current values. Dates are YYYY-MM-DD. `phase` is the training phase (cut/bulk/recomp/maintenance) and drives the pace check's direction.",
         inputSchema: {
           startingWeightKg: z.number().finite().positive().optional(),
           startingDate: z.string().optional(),
           targetWeightKg: z.number().finite().positive().optional(),
           targetDate: z.string().optional(),
           dailyCalorieTarget: z.number().finite().nonnegative().optional(),
+          phase: z.enum(GOAL_PHASES).optional(),
         },
       },
       async (input) => {
@@ -410,6 +403,7 @@ const handler = createMcpHandler(
           dailyCalorieTarget:
             input.dailyCalorieTarget ??
             (existing?.daily_calorie_target != null ? Number(existing.daily_calorie_target) : null),
+          phase: input.phase ?? asGoalPhase(existing?.phase),
         };
         await upsertGoal(merged);
         return ok({ ok: true, goal: merged });

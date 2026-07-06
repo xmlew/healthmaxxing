@@ -82,16 +82,18 @@ export async function upsertGoal(input: {
   targetWeightKg: number | null;
   targetDate: string | null;
   dailyCalorieTarget: number | null;
+  phase: string;
 }) {
   await sql`
-    insert into goals (id, starting_weight_kg, starting_date, target_weight_kg, target_date, daily_calorie_target, updated_at)
-    values (1, ${input.startingWeightKg}, ${input.startingDate}, ${input.targetWeightKg}, ${input.targetDate}, ${input.dailyCalorieTarget}, now())
+    insert into goals (id, starting_weight_kg, starting_date, target_weight_kg, target_date, daily_calorie_target, phase, updated_at)
+    values (1, ${input.startingWeightKg}, ${input.startingDate}, ${input.targetWeightKg}, ${input.targetDate}, ${input.dailyCalorieTarget}, ${input.phase}, now())
     on conflict (id) do update set
       starting_weight_kg = excluded.starting_weight_kg,
       starting_date = excluded.starting_date,
       target_weight_kg = excluded.target_weight_kg,
       target_date = excluded.target_date,
       daily_calorie_target = excluded.daily_calorie_target,
+      phase = excluded.phase,
       updated_at = now()
   `;
 }

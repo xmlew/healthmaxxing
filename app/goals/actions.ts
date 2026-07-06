@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { upsertGoal } from "@/lib/queries";
+import { asGoalPhase } from "@/lib/goals";
 
 function num(formData: FormData, key: string): number | null {
   const raw = formData.get(key);
@@ -22,6 +23,7 @@ export async function saveGoal(formData: FormData) {
     targetWeightKg: num(formData, "targetWeightKg"),
     targetDate: str(formData, "targetDate"),
     dailyCalorieTarget: num(formData, "dailyCalorieTarget"),
+    phase: asGoalPhase(formData.get("phase")),
   });
 
   revalidatePath("/");
