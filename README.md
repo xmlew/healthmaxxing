@@ -8,13 +8,16 @@ you manually log weight and food, and shows trends against a weight goal.
 
 | Route | What it does |
 |---|---|
-| `/` | Today's steps, active/basal energy, sleep, resting HR, calories in vs. out, and progress toward your weight goal |
+| `/` | Today's steps, active/basal energy, sleep, resting HR, calories in vs. out, and progress toward your weight goal - plus a banner when resting HR spikes above its 30-day baseline |
 | `/trends` | Weight vs. goal, calories in vs. out, steps, sleep, resting heart rate, and HRV over 7/30/90 days |
+| `/recovery` | Resting HR and HRV overlaid on daily training load over 7/30/90 days, with an overtraining flag when recovery worsens under recent elevated load |
+| `/tdee` | Estimated TDEE (active + basal energy) vs. logged calories: daily and rolling net balance, cumulative deficit/surplus, and implied weight change |
+| `/correlations` | Pearson correlation for curated daily-series pairings (sleep vs. next-day resting HR, steps vs. weight-loss rate), with a "not enough data" guard when paired points are too few |
 | `/log` | Manual weight and food entries, with delete |
 | `/goals` | Starting/target weight, target date, daily calorie target, with a sustainable-pace check (flags if the implied kg/week is aggressive) |
 | `/workouts` | Imported workouts list + per-workout detail (duration, distance, energy, heart rate) |
 | `POST /api/ingest` | Where Health Auto Export's REST API automation posts to, protected by a bearer-token secret (`INGEST_SECRET`) |
-| `/api/mcp` | Remote MCP server exposing the same data to Claude as tools - query trends, log weight/food, manage goals - protected by `MCP_SECRET` |
+| `/api/mcp` | Remote MCP server exposing the same data to Claude as tools - query trends, analyze recovery/TDEE/correlations/anomalies, log weight/food, manage goals - protected by `MCP_SECRET` |
 
 **Data model** (`db/schema.sql`): `health_metric_samples` (every Apple Health
 metric, generic name/unit/qty/min/avg/max + raw JSON payload),
@@ -103,7 +106,8 @@ route handler (`app/api/[transport]/route.ts`) that reuses the same Postgres
 queries as the dashboard, over Streamable HTTP, protected by a bearer token.
 
 Tools: `get_today_summary`, `get_trends`, `get_goal_status`, `list_workouts`,
-`get_workout_detail`, `get_recent_logs` (read); `log_weight`, `log_food`,
+`get_workout_detail`, `get_recent_logs`, `get_recovery`, `get_tdee`,
+`get_correlation`, `get_anomalies` (read); `log_weight`, `log_food`,
 `set_goal`, `delete_weight_log`, `delete_food_log` (write).
 
 Set `MCP_SECRET` in `.env.local` (`openssl rand -base64 32`), then register it

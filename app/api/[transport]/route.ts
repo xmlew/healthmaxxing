@@ -15,13 +15,20 @@ import {
   getRecentFoodLogs,
   getRecentWeightLogs,
   getRecentWorkouts,
+  getPairingCorrelation,
   getTodayFoodTotal,
   getTodayMetricSum,
   getWeightSeries,
   getWorkoutById,
   upsertGoal,
 } from "@/lib/queries";
+import { getRecoveryAnalysis } from "@/lib/recovery";
+import { getTdeeAnalysis } from "@/lib/tdee";
+import { evaluateAnomalies } from "@/lib/anomalies";
+import { PAIRINGS, type PairingKey } from "@/lib/correlation";
 import { kjToKcal, TIME_ZONE } from "@/lib/time";
+
+const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]];
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -407,6 +414,73 @@ const handler = createMcpHandler(
         await upsertGoal(merged);
         return ok({ ok: true, goal: merged });
       }
+    );
+
+    server.registerTool(
+      "get_recovery",
+      {
+        title: "Recovery vs training load",
+        description:
+          "Recovery analysis over N days (dashboard /recovery): resting heart rate and HRV overlaid on daily training load, plus an overtraining flag comparing recent days against an earlier baseline. Load energy is in kcal. Use to judge whether recent training is outpacing recovery.",
+        inputSchema: {
+          days: z.number().int().positive().max(365).default(30),
+        },
+      },
+      async ({ days }) => ok(await getRecoveryAnalysis(days)),
+    );
+
+    server.registerTool(
+      "get_tdee",
+      {
+        title: "TDEE vs logged intake",
+        description:
+          "Total daily energy expenditure vs logged calories over N days (dashboard /tdee). Returns per-day TDEE/intake/net, a rolling-window average, cumulative net balance, and implied weight change (kcal and kg). Days missing basal energy are flagged. Use for self-correcting the calorie goal against measured burn.",
+        inputSchema: {
+          days: z.number().int().positive().max(365).default(30),
+          rollingWindow: z.number().int().positive().max(90).optional(),
+        },
+      },
+      async ({ days, rollingWindow }) =>
+        ok(await getTdeeAnalysis(days, rollingWindow)),
+    );
+
+    server.registerTool(
+      "get_correlation",
+      {
+        title: "Metric correlation",
+        description:
+          "Pearson correlation for one curated daily-series pairing over N days (dashboard /correlations). Pairings: 'sleep-vs-next-day-rhr' (sleep against the following day's resting HR) and 'steps-vs-weight-loss-rate' (daily steps against weight-loss rate). Returns r, the paired-point count n, and a status ('ok', 'insufficient-data' when n is too low to be meaningful, or 'zero-variance'). Correlation is not causation.",
+        inputSchema: {
+          pairing: z.enum(PAIRING_KEYS),
+          days: z.number().int().positive().max(365).default(90),
+        },
+      },
+      async ({ pairing, days }) => ok(await getPairingCorrelation(pairing, days)),
+    );
+
+    server.registerTool(
+      "get_anomalies",
+      {
+        title: "Anomaly signals",
+        description:
+          "Evaluates each health anomaly signal against its trailing 30-day baseline (dashboard home banner). Returns every signal with its status ('flagged', 'within_baseline', 'insufficient_data', or 'degenerate_baseline'); a flagged signal includes current value, baseline mean, and deviation %. Currently covers resting heart rate. Use to proactively surface early illness/overtraining signs.",
+      },
+      async () => {
+        const evaluations = await evaluateAnomalies();
+        // deviationPct/thresholdPct are fractions in lib/anomalies.ts; scale to
+        // percent for the response, the same way app/page.tsx does at render, so
+        // the "deviation %" the tool promises matches the number a human sees.
+        return ok(
+          evaluations.map((e) => ({
+            ...e,
+            anomaly: e.anomaly && {
+              ...e.anomaly,
+              deviationPct: round1(e.anomaly.deviationPct * 100),
+              thresholdPct: round1(e.anomaly.thresholdPct * 100),
+            },
+          })),
+        );
+      },
     );
 
     server.registerTool(
