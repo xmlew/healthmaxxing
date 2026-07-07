@@ -153,3 +153,43 @@ create table if not exists strength_sets (
 create index if not exists strength_sets_session_idx on strength_sets (session_id);
 create index if not exists strength_sets_exercise_idx
   on strength_sets (exercise_id, created_at desc);
+
+-- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
+-- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
+-- the resource server (/api/mcp) and its own authorization server. Secrets, codes,
+-- and tokens are stored as their sha256 (base64url) digests, never in plaintext:
+-- the DB never needs the original, only to recognize a value presented back to it.
+create table if not exists oauth_clients (
+  client_id text primary key,
+  client_secret_hash text,
+  client_name text,
+  redirect_uris text[] not null,
+  token_endpoint_auth_method text not null default 'client_secret_post',
+  scope text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists oauth_authorization_codes (
+  code_hash text primary key,
+  client_id text not null references oauth_clients (client_id) on delete cascade,
+  redirect_uri text not null,
+  code_challenge text not null,
+  code_challenge_method text not null,
+  scope text,
+  resource text,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists oauth_access_tokens (
+  access_token_hash text primary key,
+  refresh_token_hash text unique,
+  client_id text not null references oauth_clients (client_id) on delete cascade,
+  scope text,
+  resource text,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists oauth_access_tokens_refresh_idx
+  on oauth_access_tokens (refresh_token_hash);

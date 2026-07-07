@@ -125,10 +125,27 @@ claude mcp add --transport http health-maxxing http://localhost:3000/api/mcp \
   --header "Authorization: Bearer <your MCP_SECRET>"
 ```
 
-Check the connection with `/mcp` inside a session. Using it from **Claude.ai**
-as a custom connector instead requires the server to be reachable over public
-HTTPS (localhost only works for Claude Code, or expose it through a tunnel);
-deploying it publicly isn't set up yet.
+Check the connection with `/mcp` inside a session.
+
+### Claude.ai custom connector (OAuth)
+
+Claude.ai's custom connectors don't accept a raw bearer token - they require an
+OAuth 2.1 handshake. The app is therefore its own OAuth authorization server
+(`lib/oauth.ts`, `app/api/oauth/*`): it publishes the discovery metadata the
+[MCP authorization spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
+mandates (RFC 9728 / RFC 8414), registers clients dynamically (RFC 7591), and
+runs the authorization-code + PKCE flow with RFC 8707 audience-bound tokens.
+
+To connect, add a custom connector in Claude.ai with:
+
+- **Remote MCP server URL**: `https://<your-host>/api/mcp`
+- **OAuth Client ID / Secret**: leave blank - the connector registers itself
+
+Claude opens a consent screen served by the app; enter your `MCP_SECRET` as the
+access secret to authorize. `MCP_SECRET` plays both roles: the raw bearer for
+Claude Code (above) and the owner password for this browser flow. The server
+must be reachable over public HTTPS (all OAuth redirect URIs must be HTTPS, so a
+`localhost` tunnel that terminates TLS, or a real deployment, is required).
 
 ## Current status
 
