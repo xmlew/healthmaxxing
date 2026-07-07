@@ -1,5 +1,6 @@
-import { createMcpHandler, withMcpAuth } from "mcp-handler";
+import { createMcpHandler, getPublicOrigin, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { timingSafeEqualStr, verifyOAuthAccessToken } from "@/lib/oauth";
 import { z } from "zod";
 import {
   addFoodLog,
@@ -762,11 +763,17 @@ const handler = createMcpHandler(
   { basePath: "/api" }
 );
 
-// Shared-secret bearer auth, same convention as INGEST_SECRET (app/api/ingest).
-const verifyToken = async (_req: Request, bearerToken?: string): Promise<AuthInfo | undefined> => {
+// Two accepted bearers: the raw MCP_SECRET (programmatic clients, CLI, tests -
+// same convention as INGEST_SECRET) and OAuth access tokens issued by this app's
+// authorization server for the Claude.ai connector (see lib/oauth.ts). OAuth
+// tokens are audience-bound to this server's origin.
+const verifyToken = async (req: Request, bearerToken?: string): Promise<AuthInfo | undefined> => {
+  if (!bearerToken) return undefined;
   const secret = process.env.MCP_SECRET;
-  if (!secret || !bearerToken || bearerToken !== secret) return undefined;
-  return { token: bearerToken, clientId: "health-maxxing", scopes: [] };
+  if (secret && timingSafeEqualStr(bearerToken, secret)) {
+    return { token: bearerToken, clientId: "health-maxxing", scopes: [] };
+  }
+  return verifyOAuthAccessToken(bearerToken, getPublicOrigin(req));
 };
 
 const authHandler = withMcpAuth(handler, verifyToken, { required: true });
