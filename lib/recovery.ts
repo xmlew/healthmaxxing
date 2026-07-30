@@ -37,8 +37,8 @@ export type RecoveryFlag = {
 export type OverreachingSignal = {
   muscleGroup: string;
   weeksElevated: number;
-  recentWeeklyVolume: number;
-  baselineWeeklyVolume: number;
+  recentWeeklyVolumeLb: number;
+  baselineWeeklyVolumeLb: number;
 };
 
 export type RecoveryAnalysis = {
@@ -55,14 +55,14 @@ export type RecoveryAnalysis = {
 // weeklyVolumeByMuscleGroup only emits weeks that had sets, so a deload week is
 // simply absent. Fill the calendar gaps with 0 volume before scanning, so "N
 // weeks running" means consecutive calendar weeks and a rest week breaks the streak.
-function fillCalendarWeeks(weeks: { weekStart: string; volume: number }[]): { weekStart: string; volume: number }[] {
+function fillCalendarWeeks(weeks: { weekStart: string; volumeLb: number }[]): { weekStart: string; volumeLb: number }[] {
   if (weeks.length === 0) return [];
-  const byWeek = new Map(weeks.map((w) => [w.weekStart, w.volume]));
+  const byWeek = new Map(weeks.map((w) => [w.weekStart, w.volumeLb]));
   const sorted = [...weeks].sort((a, b) => a.weekStart.localeCompare(b.weekStart));
   const last = sorted[sorted.length - 1].weekStart;
-  const filled: { weekStart: string; volume: number }[] = [];
+  const filled: { weekStart: string; volumeLb: number }[] = [];
   for (let week = sorted[0].weekStart; week <= last; week = shiftDayKey(week, 7)) {
-    filled.push({ weekStart: week, volume: byWeek.get(week) ?? 0 });
+    filled.push({ weekStart: week, volumeLb: byWeek.get(week) ?? 0 });
   }
   return filled;
 }
@@ -81,12 +81,12 @@ export function computeOverreaching(
     const weeks = fillCalendarWeeks(rawWeeks);
     if (weeks.length < OVERREACH_MIN_WEEKS + 1) continue;
     const baseline = weeks.slice(0, -OVERREACH_MIN_WEEKS);
-    const baselineAvg = baseline.reduce((sum, w) => sum + w.volume, 0) / baseline.length;
+    const baselineAvg = baseline.reduce((sum, w) => sum + w.volumeLb, 0) / baseline.length;
     if (baselineAvg <= 0) continue;
 
     let weeksElevated = 0;
     for (let i = weeks.length - 1; i >= 0; i--) {
-      if (weeks[i].volume > baselineAvg) weeksElevated += 1;
+      if (weeks[i].volumeLb > baselineAvg) weeksElevated += 1;
       else break;
     }
     if (weeksElevated < OVERREACH_MIN_WEEKS) continue;
@@ -95,8 +95,8 @@ export function computeOverreaching(
     signals.push({
       muscleGroup,
       weeksElevated,
-      recentWeeklyVolume: Math.round(recent.reduce((sum, w) => sum + w.volume, 0) / recent.length),
-      baselineWeeklyVolume: Math.round(baselineAvg),
+      recentWeeklyVolumeLb: Math.round(recent.reduce((sum, w) => sum + w.volumeLb, 0) / recent.length),
+      baselineWeeklyVolumeLb: Math.round(baselineAvg),
     });
   }
   return signals;

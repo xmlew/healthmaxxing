@@ -139,34 +139,35 @@ test("strength tools are registered and round-trip a logged set", async () => {
     assert.ok(names.includes(expected), `tools/list missing ${expected}`);
   }
 
-  const logged = await callTool<{ ok: boolean; setId: number; sessionId: number; estimated1RM: number }>("log_set", {
+  const logged = await callTool<{ ok: boolean; setId: number; sessionId: number; estimated1RMLb: number }>("log_set", {
     exercise: STRENGTH_TEST_EXERCISE,
     reps: 5,
-    weight: 100,
+    weight_lb: 100,
     muscle_group: "push",
   });
   assert.equal(logged.ok, true, "log_set should succeed");
   assert.ok(logged.setId, "log_set returns a setId");
   strengthTestSessionId = logged.sessionId;
   // Epley: 100 * (1 + 5/30) = 116.7
-  assert.equal(logged.estimated1RM, 116.7, "log_set echoes the estimated 1RM");
+  assert.equal(logged.estimated1RMLb, 116.7, "log_set echoes the estimated 1RM");
 
-  const history = await callTool<{ sessions: { volume: number; sets: { setId: number }[] }[] }>(
-    "get_exercise_history",
-    { exercise: STRENGTH_TEST_EXERCISE },
-  );
+  const history = await callTool<{
+    sessions: { volumeLb: number; sets: { setId: number; weightLb: number }[] }[];
+  }>("get_exercise_history", { exercise: STRENGTH_TEST_EXERCISE });
   assert.ok(Array.isArray(history.sessions) && history.sessions.length >= 1, "history has a session");
-  assert.equal(history.sessions[0].volume, 500, "session volume is weight*reps (100*5)");
+  // Logged in pounds, stored in kilograms, read back in pounds without drift.
+  assert.equal(history.sessions[0].sets[0].weightLb, 100, "weight round-trips through kg storage");
+  assert.equal(history.sessions[0].volumeLb, 500, "session volume is weight*reps (100*5)");
   assert.ok(history.sessions[0].sets[0].setId, "each set carries a setId");
 
   const oneRm = await callTool("get_1rm_estimate", { exercise: STRENGTH_TEST_EXERCISE, formula: "brzycki" });
   // Brzycki: 100 * 36/(37-5) = 112.5
-  assert.equal(oneRm.current, 112.5, "get_1rm_estimate uses the requested formula");
+  assert.equal(oneRm.currentLb, 112.5, "get_1rm_estimate uses the requested formula");
 
   const overload = await callTool("get_progressive_overload_status", { exercise: STRENGTH_TEST_EXERCISE });
   assert.ok("stalled" in overload, "overload status has a stalled flag");
   assert.ok(Array.isArray(overload.sessions), "overload status has a sessions array");
-  assert.equal(overload.latestSessionVolume, 500, "latest session volume is 100*5");
+  assert.equal(overload.latestSessionVolumeLb, 500, "latest session volume is 100*5");
 
   const exercises = await callTool<Array<{ name: string }>>("list_exercises");
   assert.ok(exercises.some((e) => e.name === STRENGTH_TEST_EXERCISE), "list_exercises includes the logged exercise");

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { addSet, deleteSet, nextSetNumber, resolveManualSession, upsertExercise } from "@/lib/strength";
 import { dayKeyInZone } from "@/lib/time";
+import { lbToKg } from "@/lib/units";
 
 function num(formData: FormData, key: string): number | null {
   const raw = formData.get(key);
@@ -34,7 +35,7 @@ export async function logSet(formData: FormData) {
     sessionId,
     exerciseId,
     setNumber,
-    weight: num(formData, "weightKg") ?? 0,
+    weightKg: lbToKg(num(formData, "weightLb") ?? 0),
     reps,
     rpe: num(formData, "rpe"),
     rir: num(formData, "rir"),

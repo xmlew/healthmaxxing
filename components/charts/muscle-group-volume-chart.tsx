@@ -2,7 +2,7 @@
 
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-type GroupVolume = { muscleGroup: string; weeks: { weekStart: string; volume: number }[] };
+type GroupVolume = { muscleGroup: string; weeks: { weekStart: string; volumeLb: number }[] };
 
 // Distinct series colors; cycles if there are more groups than colors.
 const COLORS = [
@@ -61,7 +61,7 @@ export function MuscleGroupVolumeChart({ data }: { data: GroupVolume[] }) {
     // diving to the floor and back.
     const row: Record<string, string | number | null> = { weekStart };
     for (const g of data) {
-      row[g.muscleGroup] = g.weeks.find((w) => w.weekStart === weekStart)?.volume ?? null;
+      row[g.muscleGroup] = g.weeks.find((w) => w.weekStart === weekStart)?.volumeLb ?? null;
     }
     return row;
   });

@@ -109,9 +109,12 @@ create table if not exists exercises (
   id bigserial primary key,
   name text not null,
   muscle_group text,
-  default_unit text not null default 'kg',
   created_at timestamptz not null default now()
 );
+
+-- Weight is stored in kilograms everywhere (see lib/units.ts) and rendered in
+-- pounds, so there is no per-exercise unit to record.
+alter table exercises drop column if exists default_unit;
 
 -- Dedupe exercise names case-insensitively so the write path (upsert) and the
 -- read path (getExerciseHistory matches on lower(name)) agree - otherwise "Bench"
@@ -143,12 +146,26 @@ create table if not exists strength_sets (
   session_id bigint not null references strength_sessions (id) on delete cascade,
   exercise_id bigint not null references exercises (id),
   set_number integer not null,
-  weight double precision,
+  weight_kg double precision,
   reps integer,
   rpe double precision,
   rir double precision,
   created_at timestamptz not null default now()
 );
+
+-- The column carried kilograms all along; the name now says so, matching
+-- weight_logs.weight_kg. Guarded so re-running against a migrated database
+-- is a no-op.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'strength_sets' and column_name = 'weight'
+  ) then
+    alter table strength_sets rename column weight to weight_kg;
+  end if;
+end
+$$;
 
 create index if not exists strength_sets_session_idx on strength_sets (session_id);
 create index if not exists strength_sets_exercise_idx

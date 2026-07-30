@@ -81,7 +81,7 @@ export default async function RecoveryPage({
               <li key={o.muscleGroup} className="flex items-baseline justify-between gap-4">
                 <span className="font-medium capitalize text-foreground">{o.muscleGroup}</span>
                 <span className="tabular-nums text-muted">
-                  {o.recentWeeklyVolume.toLocaleString("en-US")} vs {o.baselineWeeklyVolume.toLocaleString("en-US")} baseline
+                  {o.recentWeeklyVolumeLb.toLocaleString("en-US")} vs {o.baselineWeeklyVolumeLb.toLocaleString("en-US")} lb baseline
                   {" "}({o.weeksElevated} wks)
                 </span>
               </li>
@@ -93,7 +93,7 @@ export default async function RecoveryPage({
       {muscleGroupVolume.length > 0 ? (
         <div className="rounded-3xl border border-border bg-surface p-6">
           <h2 className="mb-2 font-display text-lg">Weekly volume by muscle group</h2>
-          <p className="mb-3 text-xs text-muted">Sets x reps x weight per week</p>
+          <p className="mb-3 text-xs text-muted">Sets x reps x weight (lb) per week</p>
           <MuscleGroupVolumeChart data={muscleGroupVolume} />
         </div>
       ) : null}

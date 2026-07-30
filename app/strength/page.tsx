@@ -6,6 +6,7 @@ import {
   oneRepMaxSeries,
   type StrengthSetRow,
 } from "@/lib/strength";
+import { displayLb, displayVolumeLb } from "@/lib/units";
 import { SetForm } from "./set-form";
 import { removeSet } from "./actions";
 
@@ -16,7 +17,7 @@ const RECENT_SESSIONS = 4;
 
 type SessionSummary = {
   date: string;
-  volume: number;
+  volumeLb: number;
   sets: StrengthSetRow[];
 };
 
@@ -30,7 +31,7 @@ function summarizeSessions(sets: StrengthSetRow[]): SessionSummary[] {
   return [...bySession.entries()]
     .map(([date, rows]) => ({
       date,
-      volume: Math.round(rows.reduce((sum, r) => sum + (r.weight ?? 0) * (r.reps ?? 0), 0)),
+      volumeLb: displayVolumeLb(rows.reduce((sum, r) => sum + (r.weightKg ?? 0) * (r.reps ?? 0), 0)),
       sets: rows,
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -48,7 +49,10 @@ export default async function StrengthPage() {
       return {
         exercise,
         sets,
-        oneRm: oneRepMaxSeries(sets, "epley"),
+        oneRm: oneRepMaxSeries(sets, "epley").map((p) => ({
+          date: p.date,
+          oneRepMax: displayLb(p.oneRepMax),
+        })),
         overload: computeOverloadStatus(exercise.name, exercise.muscleGroup, sets),
       };
     }),
@@ -105,9 +109,9 @@ export default async function StrengthPage() {
                     <p className="text-xs font-medium uppercase tracking-wide text-muted">Est. 1RM</p>
                     <p className="font-display text-2xl tabular-nums tracking-tight text-accent">
                       {current}
-                      <span className="ml-1 text-sm font-normal text-muted">kg</span>
+                      <span className="ml-1 text-sm font-normal text-muted">lb</span>
                     </p>
-                    {best > current ? <p className="text-xs text-muted">best {best} kg</p> : null}
+                    {best > current ? <p className="text-xs text-muted">best {best} lb</p> : null}
                   </div>
                 ) : null}
               </div>
@@ -115,7 +119,7 @@ export default async function StrengthPage() {
               {oneRm.length >= 2 ? (
                 <TrendLine
                   data={oneRm.map((p) => ({ date: `${p.date}T12:00:00`, value: p.oneRepMax }))}
-                  unit="kg"
+                  unit="lb"
                 />
               ) : (
                 <p className="py-6 text-center text-sm text-muted">
@@ -132,13 +136,13 @@ export default async function StrengthPage() {
                     <div key={s.date}>
                       <div className="flex items-baseline justify-between text-xs text-muted">
                         <span>{formatDate(s.date)}</span>
-                        <span className="tabular-nums">{s.volume.toLocaleString("en-US")} vol</span>
+                        <span className="tabular-nums">{s.volumeLb.toLocaleString("en-US")} lb vol</span>
                       </div>
                       <ul className="mt-1 flex flex-col divide-y divide-border">
                         {s.sets.map((set) => (
                           <li key={set.setId} className="flex items-center justify-between gap-3 py-1.5 text-sm">
                             <span className="tabular-nums">
-                              {set.weight != null ? `${set.weight} kg` : "-"}
+                              {set.weightKg != null ? `${displayLb(set.weightKg)} lb` : "-"}
                               {set.reps != null ? ` x ${set.reps}` : ""}
                               {set.rpe != null ? <span className="ml-2 text-muted">RPE {set.rpe}</span> : null}
                             </span>

@@ -38,8 +38,8 @@ export function SetForm() {
       </div>
       <div className="grid grid-cols-2 gap-4">
         <label className="flex flex-col gap-1.5 text-sm">
-          <span className="text-muted">Weight kg (0 = bodyweight)</span>
-          <input name="weightKg" type="number" step="0.5" min="0" inputMode="decimal" placeholder="80" className={inputClass} />
+          <span className="text-muted">Weight lb (0 = bodyweight)</span>
+          <input name="weightLb" type="number" step="2.5" min="0" inputMode="decimal" placeholder="135" className={inputClass} />
         </label>
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="text-muted">Reps</span>

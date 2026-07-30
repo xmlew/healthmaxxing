@@ -44,6 +44,7 @@ import {
   type StrengthSetRow,
 } from "@/lib/strength";
 import { dayKeyInZone, kjToKcal, TIME_ZONE } from "@/lib/time";
+import { displayLb, displayVolumeLb, kgToLb, lbToKg } from "@/lib/units";
 
 const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]];
 
@@ -557,11 +558,11 @@ const handler = createMcpHandler(
       {
         title: "Log a strength set",
         description:
-          "Record one working set of a strength exercise. `exercise` and `reps` required; `weight` in kg (0 for bodyweight), `rpe`/`rir` optional. `muscle_group` (e.g. push/pull/legs or a specific muscle) is stored on the exercise the first time you name it. `set_number` auto-increments within the day's session if omitted. `date` (ISO) defaults to now; all sets on one calendar day share one session.",
+          "Record one working set of a strength exercise. To record a whole session, prefer log_workout - it takes every exercise in a single call. `exercise` and `reps` required; `weight_lb` in pounds (0 for bodyweight), `rpe`/`rir` optional. `muscle_group` (e.g. push/pull/legs or a specific muscle) is stored on the exercise the first time you name it. `set_number` auto-increments within the day's session if omitted. `date` (ISO) defaults to now; all sets on one calendar day share one session.",
         inputSchema: {
           exercise: z.string().min(1),
           reps: z.number().int().positive(),
-          weight: z.number().finite().nonnegative().default(0),
+          weight_lb: z.number().finite().nonnegative().default(0),
           rpe: z.number().finite().min(0).max(10).optional(),
           rir: z.number().finite().min(0).max(10).optional(),
           muscle_group: z.string().optional(),
@@ -569,7 +570,7 @@ const handler = createMcpHandler(
           date: z.string().optional(),
         },
       },
-      async ({ exercise, reps, weight, rpe, rir, muscle_group, set_number, date }) => {
+      async ({ exercise, reps, weight_lb, rpe, rir, muscle_group, set_number, date }) => {
         const at = resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         const sessionDate = dayKeyInZone(new Date(at.iso));
@@ -580,7 +581,7 @@ const handler = createMcpHandler(
           sessionId,
           exerciseId,
           setNumber,
-          weight,
+          weightKg: lbToKg(weight_lb),
           reps,
           rpe: rpe ?? null,
           rir: rir ?? null,
@@ -592,9 +593,9 @@ const handler = createMcpHandler(
           sessionDate,
           exercise: exercise.trim(),
           setNumber,
-          weight,
+          weightLb: weight_lb,
           reps,
-          estimated1RM: round1(estimate1RM(weight, reps)),
+          estimated1RMLb: round1(estimate1RM(weight_lb, reps)),
         });
       }
     );
@@ -604,7 +605,7 @@ const handler = createMcpHandler(
       {
         title: "Exercise history",
         description:
-          "Sets for one exercise over N days, grouped by session, with each set's `setId` (required to delete it via delete_set), estimated 1RM, per-session total volume (sum of weight x reps), and each session's best estimated 1RM. `formula` selects the 1RM estimator (epley or brzycki).",
+          "Sets for one exercise over N days, grouped by session, with each set's `setId` (required to delete it via delete_set), estimated 1RM, per-session total volume (sum of weight x reps), and each session's best estimated 1RM. All weights and volumes are in pounds. `formula` selects the 1RM estimator (epley or brzycki).",
         inputSchema: {
           exercise: z.string().min(1),
           days: z.number().int().positive().max(365).default(90),
@@ -626,19 +627,28 @@ const handler = createMcpHandler(
           const setsOut = rows.map((r) => ({
             setId: r.setId,
             setNumber: r.setNumber,
-            weight: r.weight,
+            weightLb: r.weightKg != null ? displayLb(r.weightKg) : null,
             reps: r.reps,
             rpe: r.rpe,
             rir: r.rir,
-            estimated1RM:
-              r.weight != null && r.reps != null ? round1(estimate1RM(r.weight, r.reps, formula)) : null,
+            estimated1RMLb:
+              r.weightKg != null && r.reps != null
+                ? round1(kgToLb(estimate1RM(r.weightKg, r.reps, formula)))
+                : null,
           }));
-          const volume = rows.reduce((sum, r) => sum + (r.weight ?? 0) * (r.reps ?? 0), 0);
-          const bestEstimated1RM = setsOut.reduce<number | null>(
-            (best, s) => (s.estimated1RM != null && (best == null || s.estimated1RM > best) ? s.estimated1RM : best),
+          const volumeKg = rows.reduce((sum, r) => sum + (r.weightKg ?? 0) * (r.reps ?? 0), 0);
+          const bestEstimated1RMLb = setsOut.reduce<number | null>(
+            (best, s) =>
+              s.estimated1RMLb != null && (best == null || s.estimated1RMLb > best) ? s.estimated1RMLb : best,
             null,
           );
-          return { date, muscleGroup: rows[0].muscleGroup, sets: setsOut, volume: Math.round(volume), bestEstimated1RM };
+          return {
+            date,
+            muscleGroup: rows[0].muscleGroup,
+            sets: setsOut,
+            volumeLb: displayVolumeLb(volumeKg),
+            bestEstimated1RMLb,
+          };
         });
         return ok({ exercise, days, formula, sessions });
       }
@@ -649,7 +659,7 @@ const handler = createMcpHandler(
       {
         title: "Estimated 1RM",
         description:
-          "Estimated one-rep max for an exercise: the current (most recent session's best) and all-time best over N days, plus a per-session series for charting. `formula` is epley or brzycki.",
+          "Estimated one-rep max for an exercise, in pounds: the current (most recent session's best) and all-time best over N days, plus a per-session series for charting. `formula` is epley or brzycki.",
         inputSchema: {
           exercise: z.string().min(1),
           days: z.number().int().positive().max(365).default(365),
@@ -658,12 +668,22 @@ const handler = createMcpHandler(
       },
       async ({ exercise, days, formula }) => {
         const sets = await getExerciseHistory(exercise, days);
-        const series = oneRepMaxSeries(sets, formula);
+        const series = oneRepMaxSeries(sets, formula).map((p) => ({
+          date: p.date,
+          oneRepMaxLb: displayLb(p.oneRepMax),
+        }));
         if (series.length === 0) {
-          return ok({ exercise, days, formula, current: null, best: null, series: [], message: "No sets logged for this exercise in range." });
+          return ok({ exercise, days, formula, currentLb: null, bestLb: null, series: [], message: "No sets logged for this exercise in range." });
         }
-        const best = series.reduce((m, p) => Math.max(m, p.oneRepMax), 0);
-        return ok({ exercise, days, formula, current: series[series.length - 1].oneRepMax, best, series });
+        const bestLb = series.reduce((m, p) => Math.max(m, p.oneRepMaxLb), 0);
+        return ok({
+          exercise,
+          days,
+          formula,
+          currentLb: series[series.length - 1].oneRepMaxLb,
+          bestLb,
+          series,
+        });
       }
     );
 
@@ -672,7 +692,7 @@ const handler = createMcpHandler(
       {
         title: "Progressive overload status",
         description:
-          "Whether an exercise is still progressing or has stalled. For each exercise: per-session total volume and best-set volume (heaviest set's weight x reps), sessions since the last best-set-volume PR, and a stall flag (no new best-set PR in 3+ sessions). Omit `exercise` to get every exercise's status plus the list of stalled ones. This is the real muscle-building signal, not just weight going up.",
+          "Whether an exercise is still progressing or has stalled. For each exercise: per-session total volume and best-set volume (heaviest set's weight x reps), sessions since the last best-set-volume PR, and a stall flag (no new best-set PR in 3+ sessions). Volumes are in pounds. Omit `exercise` to get every exercise's status plus the list of stalled ones. This is the real muscle-building signal, not just weight going up.",
         inputSchema: {
           exercise: z.string().optional(),
           days: z.number().int().positive().max(365).default(180),
@@ -700,8 +720,8 @@ const handler = createMcpHandler(
           exercises: statuses.map((s) => ({
             exercise: s.exercise,
             muscleGroup: s.muscleGroup,
-            latestSessionVolume: s.latestSessionVolume,
-            bestSetVolumeAllTime: s.bestSetVolumeAllTime,
+            latestSessionVolumeLb: s.latestSessionVolumeLb,
+            bestSetVolumeAllTimeLb: s.bestSetVolumeAllTimeLb,
             sessionsSinceImprovement: s.sessionsSinceImprovement,
             stalled: s.stalled,
           })),
@@ -715,7 +735,7 @@ const handler = createMcpHandler(
       {
         title: "List exercises",
         description:
-          "The strength exercise catalog - every exercise you've logged a set for, with its muscle group and default unit. Use to discover exercise names for get_exercise_history / get_1rm_estimate.",
+          "The strength exercise catalog - every exercise you've logged a set for, with its muscle group. Use to discover exercise names for get_exercise_history / get_1rm_estimate.",
       },
       async () => ok(await listExercises()),
     );

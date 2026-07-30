@@ -1,11 +1,11 @@
 import { sql } from "./db";
 import { TIME_ZONE } from "./time";
+import { displayVolumeLb } from "./units";
 
 export type ExerciseRow = {
   id: number;
   name: string;
   muscleGroup: string | null;
-  defaultUnit: string;
 };
 
 export type StrengthSetRow = {
@@ -16,7 +16,7 @@ export type StrengthSetRow = {
   exerciseName: string;
   muscleGroup: string | null;
   setNumber: number;
-  weight: number | null;
+  weightKg: number | null;
   reps: number | null;
   rpe: number | null;
   rir: number | null;
@@ -26,19 +26,17 @@ function toDateStr(value: unknown): string {
   return value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
 }
 
-// Upserts by unique name. A later log that omits muscle_group/default_unit keeps
-// whatever was set before (coalesce), so re-logging a bare set never wipes a group.
+// Upserts by unique name. A later log that omits muscle_group keeps whatever was
+// set before (coalesce), so re-logging a bare set never wipes a group.
 export async function upsertExercise(input: {
   name: string;
   muscleGroup?: string | null;
-  defaultUnit?: string | null;
 }): Promise<number> {
   const rows = await sql`
-    insert into exercises (name, muscle_group, default_unit)
-    values (${input.name}, ${input.muscleGroup ?? null}, ${input.defaultUnit ?? "kg"})
+    insert into exercises (name, muscle_group)
+    values (${input.name}, ${input.muscleGroup ?? null})
     on conflict (lower(name)) do update set
-      muscle_group = coalesce(${input.muscleGroup ?? null}, exercises.muscle_group),
-      default_unit = coalesce(${input.defaultUnit ?? null}, exercises.default_unit)
+      muscle_group = coalesce(${input.muscleGroup ?? null}, exercises.muscle_group)
     returning id
   `;
   return Number(rows[0].id);
@@ -46,7 +44,7 @@ export async function upsertExercise(input: {
 
 export async function listExercises(): Promise<ExerciseRow[]> {
   const rows = await sql`
-    select id, name, muscle_group, default_unit
+    select id, name, muscle_group
     from exercises
     order by name asc
   `;
@@ -54,7 +52,6 @@ export async function listExercises(): Promise<ExerciseRow[]> {
     id: Number(r.id),
     name: r.name as string,
     muscleGroup: r.muscle_group as string | null,
-    defaultUnit: r.default_unit as string,
   }));
 }
 
@@ -88,17 +85,17 @@ export async function addSet(input: {
   sessionId: number;
   exerciseId: number;
   setNumber: number;
-  weight: number | null;
+  weightKg: number | null;
   reps: number | null;
   rpe: number | null;
   rir: number | null;
 }): Promise<number> {
   const rows = await sql`
     insert into strength_sets
-      (session_id, exercise_id, set_number, weight, reps, rpe, rir)
+      (session_id, exercise_id, set_number, weight_kg, reps, rpe, rir)
     values
       (${input.sessionId}, ${input.exerciseId}, ${input.setNumber},
-       ${input.weight}, ${input.reps}, ${input.rpe}, ${input.rir})
+       ${input.weightKg}, ${input.reps}, ${input.rpe}, ${input.rir})
     returning id
   `;
   return Number(rows[0].id);
@@ -145,16 +142,19 @@ export function estimate1RM(weight: number, reps: number, formula: OneRepMaxForm
 export type OneRepMaxPoint = { date: string; oneRepMax: number };
 
 // Best estimated 1RM per session date, ascending - the series a 1RM chart plots.
+// Deliberately unrounded: callers convert to pounds and round once when they
+// render. Rounding here too would compound, turning a 112.5 lb Brzycki estimate
+// into 112.4.
 export function oneRepMaxSeries(sets: StrengthSetRow[], formula: OneRepMaxFormula): OneRepMaxPoint[] {
   const byDate = new Map<string, number>();
   for (const s of sets) {
-    if (s.weight == null || s.reps == null) continue;
-    const est = estimate1RM(s.weight, s.reps, formula);
+    if (s.weightKg == null || s.reps == null) continue;
+    const est = estimate1RM(s.weightKg, s.reps, formula);
     byDate.set(s.sessionDate, Math.max(byDate.get(s.sessionDate) ?? 0, est));
   }
   return [...byDate.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, oneRepMax]) => ({ date, oneRepMax: Math.round(oneRepMax * 10) / 10 }));
+    .map(([date, oneRepMax]) => ({ date, oneRepMax }));
 }
 
 export async function getExerciseHistory(
@@ -165,7 +165,7 @@ export async function getExerciseHistory(
     select
       st.id as set_id, st.session_id, ss.session_date,
       e.id as exercise_id, e.name as exercise_name, e.muscle_group,
-      st.set_number, st.weight, st.reps, st.rpe, st.rir
+      st.set_number, st.weight_kg, st.reps, st.rpe, st.rir
     from strength_sets st
     join strength_sessions ss on ss.id = st.session_id
     join exercises e on e.id = st.exercise_id
@@ -181,7 +181,7 @@ export async function getExerciseHistory(
     exerciseName: r.exercise_name as string,
     muscleGroup: r.muscle_group as string | null,
     setNumber: Number(r.set_number),
-    weight: r.weight == null ? null : Number(r.weight),
+    weightKg: r.weight_kg == null ? null : Number(r.weight_kg),
     reps: r.reps == null ? null : Number(r.reps),
     rpe: r.rpe == null ? null : Number(r.rpe),
     rir: r.rir == null ? null : Number(r.rir),
@@ -192,18 +192,18 @@ export const UNTAGGED_MUSCLE_GROUP = "untagged";
 
 export type MuscleGroupWeeklyVolume = {
   muscleGroup: string;
-  weeks: { weekStart: string; volume: number }[];
+  weeks: { weekStart: string; volumeLb: number }[];
 };
 
-// Weekly training volume (sum of weight x reps) per muscle group over N days.
-// Weeks are Monday-anchored; only weeks with logged sets appear. Sets on an
-// exercise with no muscle_group fall under 'untagged'.
+// Weekly training volume (sum of weight x reps, in pounds) per muscle group over
+// N days. Weeks are Monday-anchored; only weeks with logged sets appear. Sets on
+// an exercise with no muscle_group fall under 'untagged'.
 export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGroupWeeklyVolume[]> {
   const rows = await sql`
     select
       coalesce(e.muscle_group, ${UNTAGGED_MUSCLE_GROUP}) as muscle_group,
       to_char(date_trunc('week', ss.session_date), 'YYYY-MM-DD') as week_start,
-      sum(coalesce(st.weight, 0) * coalesce(st.reps, 0)) as volume
+      sum(coalesce(st.weight_kg, 0) * coalesce(st.reps, 0)) as volume
     from strength_sets st
     join strength_sessions ss on ss.id = st.session_id
     join exercises e on e.id = st.exercise_id
@@ -211,11 +211,11 @@ export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGro
     group by 1, 2
     order by 1, 2
   `;
-  const byGroup = new Map<string, { weekStart: string; volume: number }[]>();
+  const byGroup = new Map<string, { weekStart: string; volumeLb: number }[]>();
   for (const r of rows) {
     const group = r.muscle_group as string;
     const weeks = byGroup.get(group) ?? [];
-    weeks.push({ weekStart: r.week_start as string, volume: Math.round(Number(r.volume)) });
+    weeks.push({ weekStart: r.week_start as string, volumeLb: displayVolumeLb(Number(r.volume)) });
     byGroup.set(group, weeks);
   }
   return [...byGroup.entries()].map(([muscleGroup, weeks]) => ({ muscleGroup, weeks }));
@@ -226,14 +226,14 @@ export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGro
 // recovery overtraining flag: a trailing-window comparison against the best so far).
 export const STALL_SESSIONS = 3;
 
-export type OverloadSession = { date: string; sessionVolume: number; bestSetVolume: number };
+export type OverloadSession = { date: string; sessionVolumeLb: number; bestSetVolumeLb: number };
 
 export type OverloadStatus = {
   exercise: string;
   muscleGroup: string | null;
   sessions: OverloadSession[];
-  latestSessionVolume: number | null;
-  bestSetVolumeAllTime: number | null;
+  latestSessionVolumeLb: number | null;
+  bestSetVolumeAllTimeLb: number | null;
   sessionsSinceImprovement: number;
   stalled: boolean;
 };
@@ -253,13 +253,15 @@ export function computeOverloadStatus(
     list.push(s);
     bySession.set(s.sessionDate, list);
   }
-  const sessions: OverloadSession[] = [...bySession.entries()]
+  // Scanned unrounded (in stored kilograms) so two sessions that differ by less
+  // than the display rounding still register as a PR rather than tying.
+  const sessions = [...bySession.entries()]
     .map(([date, rows]) => {
-      const setVolume = (r: StrengthSetRow) => (r.weight ?? 0) * (r.reps ?? 0);
+      const setVolume = (r: StrengthSetRow) => (r.weightKg ?? 0) * (r.reps ?? 0);
       return {
         date,
-        sessionVolume: Math.round(rows.reduce((sum, r) => sum + setVolume(r), 0)),
-        bestSetVolume: Math.round(rows.reduce((max, r) => Math.max(max, setVolume(r)), 0)),
+        sessionVolumeKg: rows.reduce((sum, r) => sum + setVolume(r), 0),
+        bestSetVolumeKg: rows.reduce((max, r) => Math.max(max, setVolume(r)), 0),
       };
     })
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -267,20 +269,25 @@ export function computeOverloadStatus(
   let runningMax = -Infinity;
   let lastImprovementIdx = -1;
   sessions.forEach((s, i) => {
-    if (s.bestSetVolume > runningMax) {
-      runningMax = s.bestSetVolume;
+    if (s.bestSetVolumeKg > runningMax) {
+      runningMax = s.bestSetVolumeKg;
       lastImprovementIdx = i;
     }
   });
 
   const sessionsSinceImprovement = sessions.length > 0 ? sessions.length - 1 - lastImprovementIdx : 0;
+  const latest = sessions.length > 0 ? sessions[sessions.length - 1] : null;
 
   return {
     exercise,
     muscleGroup,
-    sessions,
-    latestSessionVolume: sessions.length > 0 ? sessions[sessions.length - 1].sessionVolume : null,
-    bestSetVolumeAllTime: runningMax === -Infinity ? null : runningMax,
+    sessions: sessions.map((s) => ({
+      date: s.date,
+      sessionVolumeLb: displayVolumeLb(s.sessionVolumeKg),
+      bestSetVolumeLb: displayVolumeLb(s.bestSetVolumeKg),
+    })),
+    latestSessionVolumeLb: latest != null ? displayVolumeLb(latest.sessionVolumeKg) : null,
+    bestSetVolumeAllTimeLb: runningMax === -Infinity ? null : displayVolumeLb(runningMax),
     sessionsSinceImprovement,
     stalled: sessions.length > stallSessions && sessionsSinceImprovement >= stallSessions,
   };
