@@ -31,6 +31,7 @@ import { evaluateAnomalies } from "@/lib/anomalies";
 import { PAIRINGS, type PairingKey } from "@/lib/correlation";
 import {
   addSet,
+  addSets,
   computeOverloadStatus,
   deleteSet,
   estimate1RM,
@@ -39,6 +40,7 @@ import {
   nextSetNumber,
   oneRepMaxSeries,
   resolveManualSession,
+  setSessionNotes,
   upsertExercise,
   ONE_RM_FORMULAS,
   type StrengthSetRow,
@@ -52,6 +54,9 @@ const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]]
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const numOrNull = (v: unknown) => (v == null ? null : Number(v));
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
+// How far back log_workout looks to decide whether a set beat a previous best.
+const PR_LOOKBACK_DAYS = 365;
 
 // goals.starting_date / target_date are `date` columns; mirror the dashboard's
 // own normalization (app/goals/page.tsx toDateInputValue) to a YYYY-MM-DD string.
@@ -600,6 +605,122 @@ const handler = createMcpHandler(
           weightLb: weight_lb,
           reps,
           estimated1RMLb: type === "working" ? round1(estimate1RM(weight_lb, reps)) : null,
+        });
+      }
+    );
+
+    server.registerTool(
+      "log_workout",
+      {
+        title: "Log a whole workout",
+        description:
+          "Record an entire training session in one call - every exercise, every set. Prefer this over repeated log_set calls: a 5-exercise push day is one call instead of fifteen, and all its sets are written together so a failure cannot leave half a session logged. Weights are pounds (0 for bodyweight). Each set's `type` defaults to 'working'; mark warm-ups, drop sets, and burnouts so they are recorded without distorting PRs or volume. `date` (ISO) defaults to now; sets join the existing session if that calendar day already has one. Returns per-exercise working volume, top set, estimated 1RM, and whether each beat its previous best.",
+        inputSchema: {
+          exercises: z
+            .array(
+              z.object({
+                name: z.string().min(1),
+                muscle_group: z.string().optional(),
+                sets: z
+                  .array(
+                    z.object({
+                      reps: z.number().int().positive(),
+                      weight_lb: z.number().finite().nonnegative().default(0),
+                      type: z.enum(SET_TYPES).default("working"),
+                      rpe: z.number().finite().min(0).max(10).optional(),
+                      rir: z.number().finite().min(0).max(10).optional(),
+                    }),
+                  )
+                  .min(1),
+              }),
+            )
+            .min(1),
+          notes: z.string().optional(),
+          date: z.string().optional(),
+        },
+      },
+      async ({ exercises, notes, date }) => {
+        const at = resolveLoggedAt(date);
+        if ("error" in at) return fail(at.error);
+        const sessionDate = dayKeyInZone(new Date(at.iso));
+        const sessionId = await resolveManualSession(sessionDate);
+
+        // Resolved before any write so "previous best" means before today, even
+        // when this call adds to a session already started earlier in the day.
+        const resolved = await Promise.all(
+          exercises.map(async (ex) => {
+            const name = ex.name.trim();
+            const exerciseId = await upsertExercise({
+              name,
+              muscleGroup: ex.muscle_group ?? null,
+            });
+            const [history, startNumber] = await Promise.all([
+              getExerciseHistory(name, PR_LOOKBACK_DAYS),
+              nextSetNumber(sessionId, exerciseId),
+            ]);
+            // Strictly earlier sessions: sets added later the same day belong to
+            // this workout, and a back-dated entry must not be judged against
+            // sessions that came after it.
+            const priorBest1RMLb = history
+              .filter((s) => s.sessionDate < sessionDate)
+              .filter(isWorkingSet)
+              .reduce<number | null>((best, s) => {
+                if (s.weightKg == null || s.reps == null) return best;
+                const est = kgToLb(estimate1RM(s.weightKg, s.reps));
+                return best == null || est > best ? est : best;
+              }, null);
+            return { ...ex, name, exerciseId, startNumber, priorBest1RMLb };
+          }),
+        );
+
+        const setIds = await addSets(
+          resolved.flatMap((ex) =>
+            ex.sets.map((s, i) => ({
+              sessionId,
+              exerciseId: ex.exerciseId,
+              setNumber: ex.startNumber + i,
+              setType: s.type,
+              weightKg: lbToKg(s.weight_lb),
+              reps: s.reps,
+              rpe: s.rpe ?? null,
+              rir: s.rir ?? null,
+            })),
+          ),
+        );
+        if (notes) await setSessionNotes(sessionId, notes);
+
+        const summary = resolved.map((ex) => {
+          const working = ex.sets.filter((s) => s.type === "working");
+          const topSet = working.reduce<(typeof working)[number] | null>(
+            (best, s) => (best == null || s.weight_lb > best.weight_lb ? s : best),
+            null,
+          );
+          const best1RMLb = working.reduce<number | null>((best, s) => {
+            const est = estimate1RM(s.weight_lb, s.reps);
+            return best == null || est > best ? est : best;
+          }, null);
+          return {
+            exercise: ex.name,
+            setsLogged: ex.sets.length,
+            workingVolumeLb: Math.round(
+              working.reduce((sum, s) => sum + s.weight_lb * s.reps, 0),
+            ),
+            topSetLb: topSet?.weight_lb ?? null,
+            topSetReps: topSet?.reps ?? null,
+            estimated1RMLb: best1RMLb != null ? round1(best1RMLb) : null,
+            previousBestEstimated1RMLb:
+              ex.priorBest1RMLb != null ? round1(ex.priorBest1RMLb) : null,
+            newPr:
+              best1RMLb != null && (ex.priorBest1RMLb == null || best1RMLb > ex.priorBest1RMLb),
+          };
+        });
+
+        return ok({
+          ok: true,
+          sessionId,
+          sessionDate,
+          setsLogged: setIds.length,
+          exercises: summary,
         });
       }
     );

@@ -10,9 +10,18 @@ const PORT = 3130;
 const BASE = `http://localhost:${PORT}`;
 const SECRET = process.env.MCP_SECRET;
 
-// Sentinel exercise the strength round-trip test writes; cleaned up in after().
+// Sentinel exercises the strength tests write; cleaned up in after().
 const STRENGTH_TEST_EXERCISE = "__mcp_test_lift__";
+const WORKOUT_TEST_EXERCISE = "__mcp_test_press__";
+const WORKOUT_TEST_ACCESSORY = "__mcp_test_raise__";
+const TEST_EXERCISES = [STRENGTH_TEST_EXERCISE, WORKOUT_TEST_EXERCISE, WORKOUT_TEST_ACCESSORY];
 let strengthTestSessionId: number | null = null;
+const workoutTestSessionIds: number[] = [];
+
+// log_workout back-dates its sessions so PR comparison spans real days.
+function daysAgoIso(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
 
 let server: ChildProcess;
 
@@ -97,14 +106,17 @@ after(async () => {
   if (!url) return;
   const sql = postgres(url, { max: 1 });
   try {
-    await sql`delete from strength_sets where exercise_id in (select id from exercises where name = ${STRENGTH_TEST_EXERCISE})`;
-    await sql`delete from exercises where name = ${STRENGTH_TEST_EXERCISE}`;
-    // Only the exact session this test created, and only if it's now empty -
+    await sql`delete from strength_sets where exercise_id in (select id from exercises where name = any(${TEST_EXERCISES}))`;
+    await sql`delete from exercises where name = any(${TEST_EXERCISES})`;
+    // Only the exact sessions these tests created, and only if now empty -
     // never other empty manual sessions on the shared DB.
-    if (strengthTestSessionId != null) {
+    const sessionIds = [strengthTestSessionId, ...workoutTestSessionIds].filter(
+      (id): id is number => id != null,
+    );
+    if (sessionIds.length > 0) {
       await sql`
         delete from strength_sessions
-        where id = ${strengthTestSessionId}
+        where id = any(${sessionIds})
           and workout_id is null
           and id not in (select session_id from strength_sets)
       `;
@@ -121,7 +133,7 @@ test("tools/list exposes the four new analysis tools", async () => {
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(tools.length, 22, "expected 22 tools total (20 prior + list_exercises + delete_set)");
+  assert.equal(tools.length, 23, "expected 23 tools total (22 prior + log_workout)");
 });
 
 test("get_macro_summary returns per-day macros and targets", async () => {
@@ -210,6 +222,91 @@ test("non-working sets are recorded but excluded from volume and 1RM", async () 
   });
   // Epley on the 100 lb working set, not the 200 lb warm-up (which would be 233.3).
   assert.equal(oneRm.currentLb, 116.7, "1RM comes from the working set");
+});
+
+test("log_workout records a whole session in one call", async () => {
+  const logged = await callTool<{
+    ok: boolean;
+    sessionId: number;
+    setsLogged: number;
+    exercises: {
+      exercise: string;
+      setsLogged: number;
+      workingVolumeLb: number;
+      topSetLb: number | null;
+      estimated1RMLb: number | null;
+      previousBestEstimated1RMLb: number | null;
+      newPr: boolean;
+    }[];
+  }>("log_workout", {
+    date: daysAgoIso(9),
+    exercises: [
+      {
+        name: WORKOUT_TEST_EXERCISE,
+        muscle_group: "push",
+        sets: [
+          { reps: 12, weight_lb: 95, type: "warmup" },
+          { reps: 8, weight_lb: 135 },
+          { reps: 8, weight_lb: 135 },
+        ],
+      },
+      {
+        name: WORKOUT_TEST_ACCESSORY,
+        muscle_group: "push",
+        sets: [{ reps: 10, weight_lb: 40 }],
+      },
+    ],
+    notes: "mcp round-trip",
+  });
+
+  assert.equal(logged.ok, true, "log_workout should succeed");
+  workoutTestSessionIds.push(logged.sessionId);
+  assert.equal(logged.setsLogged, 4, "every set across both exercises is written");
+  assert.equal(logged.exercises.length, 2, "each exercise is summarized");
+
+  const [first, second] = logged.exercises;
+  assert.equal(first.setsLogged, 3, "the warm-up is logged alongside the working sets");
+  assert.equal(first.workingVolumeLb, 2160, "working volume excludes the warm-up (135*8*2)");
+  assert.equal(first.topSetLb, 135, "top set is the heaviest working set");
+  assert.equal(second.workingVolumeLb, 400, "the second exercise is summarized independently");
+  assert.equal(first.previousBestEstimated1RMLb, null, "a brand new exercise has no previous best");
+  assert.equal(first.newPr, true, "a first-ever set counts as a PR");
+
+  // A later session is judged against the earlier one, not against itself.
+  const heavier = await callTool<{
+    sessionId: number;
+    exercises: { previousBestEstimated1RMLb: number | null; newPr: boolean }[];
+  }>("log_workout", {
+    date: daysAgoIso(2),
+    exercises: [
+      { name: WORKOUT_TEST_EXERCISE, sets: [{ reps: 8, weight_lb: 145 }] },
+    ],
+  });
+  workoutTestSessionIds.push(heavier.sessionId);
+  // Epley on the earlier top set: 135 * (1 + 8/30) = 171.
+  assert.equal(
+    heavier.exercises[0].previousBestEstimated1RMLb,
+    171,
+    "previous best comes from the earlier session",
+  );
+  assert.equal(heavier.exercises[0].newPr, true, "145 x 8 beats it");
+
+  // Back-dating between the two must not credit the session that came after.
+  const backdated = await callTool<{
+    sessionId: number;
+    exercises: { previousBestEstimated1RMLb: number | null }[];
+  }>("log_workout", {
+    date: daysAgoIso(5),
+    exercises: [
+      { name: WORKOUT_TEST_EXERCISE, sets: [{ reps: 8, weight_lb: 140 }] },
+    ],
+  });
+  workoutTestSessionIds.push(backdated.sessionId);
+  assert.equal(
+    backdated.exercises[0].previousBestEstimated1RMLb,
+    171,
+    "a back-dated session only sees sessions before it",
+  );
 });
 
 test("get_recovery returns a recovery analysis shape", async () => {

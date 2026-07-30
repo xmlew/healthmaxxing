@@ -83,7 +83,7 @@ export async function resolveManualSession(sessionDate: string): Promise<number>
   return createSession({ sessionDate });
 }
 
-export async function addSet(input: {
+export type NewSet = {
   sessionId: number;
   exerciseId: number;
   setNumber: number;
@@ -92,17 +92,34 @@ export async function addSet(input: {
   reps: number | null;
   rpe: number | null;
   rir: number | null;
-}): Promise<number> {
-  const rows = await sql`
-    insert into strength_sets
-      (session_id, exercise_id, set_number, set_type, weight_kg, reps, rpe, rir)
-    values
-      (${input.sessionId}, ${input.exerciseId}, ${input.setNumber},
-       ${input.setType ?? WORKING_SET_TYPE},
-       ${input.weightKg}, ${input.reps}, ${input.rpe}, ${input.rir})
-    returning id
-  `;
-  return Number(rows[0].id);
+};
+
+// One multi-row insert, so a whole workout lands or none of it does. A half
+// written session is worse than a failed one: the sets that made it would count
+// toward volume and PRs, and there would be nothing to show which are missing.
+export async function addSets(input: NewSet[]): Promise<number[]> {
+  if (input.length === 0) return [];
+  const values = input.map((s) => ({
+    session_id: s.sessionId,
+    exercise_id: s.exerciseId,
+    set_number: s.setNumber,
+    set_type: s.setType ?? WORKING_SET_TYPE,
+    weight_kg: s.weightKg,
+    reps: s.reps,
+    rpe: s.rpe,
+    rir: s.rir,
+  }));
+  const rows = await sql`insert into strength_sets ${sql(values)} returning id`;
+  return rows.map((r) => Number(r.id));
+}
+
+export async function addSet(input: NewSet): Promise<number> {
+  const [id] = await addSets([input]);
+  return id;
+}
+
+export async function setSessionNotes(sessionId: number, notes: string): Promise<void> {
+  await sql`update strength_sessions set notes = ${notes} where id = ${sessionId}`;
 }
 
 export async function deleteSet(id: string): Promise<boolean> {
