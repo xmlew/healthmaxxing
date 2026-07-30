@@ -1,6 +1,7 @@
 import { sql } from "./db";
 import { TIME_ZONE } from "./time";
 import { displayVolumeLb } from "./units";
+import { isWorkingSet, WORKING_SET_TYPE, type SetType } from "./set-types";
 
 export type ExerciseRow = {
   id: number;
@@ -16,6 +17,7 @@ export type StrengthSetRow = {
   exerciseName: string;
   muscleGroup: string | null;
   setNumber: number;
+  setType: SetType;
   weightKg: number | null;
   reps: number | null;
   rpe: number | null;
@@ -85,6 +87,7 @@ export async function addSet(input: {
   sessionId: number;
   exerciseId: number;
   setNumber: number;
+  setType?: SetType;
   weightKg: number | null;
   reps: number | null;
   rpe: number | null;
@@ -92,9 +95,10 @@ export async function addSet(input: {
 }): Promise<number> {
   const rows = await sql`
     insert into strength_sets
-      (session_id, exercise_id, set_number, weight_kg, reps, rpe, rir)
+      (session_id, exercise_id, set_number, set_type, weight_kg, reps, rpe, rir)
     values
       (${input.sessionId}, ${input.exerciseId}, ${input.setNumber},
+       ${input.setType ?? WORKING_SET_TYPE},
        ${input.weightKg}, ${input.reps}, ${input.rpe}, ${input.rir})
     returning id
   `;
@@ -148,6 +152,7 @@ export type OneRepMaxPoint = { date: string; oneRepMax: number };
 export function oneRepMaxSeries(sets: StrengthSetRow[], formula: OneRepMaxFormula): OneRepMaxPoint[] {
   const byDate = new Map<string, number>();
   for (const s of sets) {
+    if (!isWorkingSet(s)) continue;
     if (s.weightKg == null || s.reps == null) continue;
     const est = estimate1RM(s.weightKg, s.reps, formula);
     byDate.set(s.sessionDate, Math.max(byDate.get(s.sessionDate) ?? 0, est));
@@ -165,7 +170,7 @@ export async function getExerciseHistory(
     select
       st.id as set_id, st.session_id, ss.session_date,
       e.id as exercise_id, e.name as exercise_name, e.muscle_group,
-      st.set_number, st.weight_kg, st.reps, st.rpe, st.rir
+      st.set_number, st.set_type, st.weight_kg, st.reps, st.rpe, st.rir
     from strength_sets st
     join strength_sessions ss on ss.id = st.session_id
     join exercises e on e.id = st.exercise_id
@@ -181,6 +186,7 @@ export async function getExerciseHistory(
     exerciseName: r.exercise_name as string,
     muscleGroup: r.muscle_group as string | null,
     setNumber: Number(r.set_number),
+    setType: r.set_type as SetType,
     weightKg: r.weight_kg == null ? null : Number(r.weight_kg),
     reps: r.reps == null ? null : Number(r.reps),
     rpe: r.rpe == null ? null : Number(r.rpe),
@@ -208,6 +214,7 @@ export async function weeklyVolumeByMuscleGroup(days: number): Promise<MuscleGro
     join strength_sessions ss on ss.id = st.session_id
     join exercises e on e.id = st.exercise_id
     where ss.session_date >= (now() at time zone ${TIME_ZONE})::date - ${days}::int
+      and st.set_type = ${WORKING_SET_TYPE}
     group by 1, 2
     order by 1, 2
   `;
@@ -248,7 +255,7 @@ export function computeOverloadStatus(
   stallSessions = STALL_SESSIONS,
 ): OverloadStatus {
   const bySession = new Map<string, StrengthSetRow[]>();
-  for (const s of sets) {
+  for (const s of sets.filter(isWorkingSet)) {
     const list = bySession.get(s.sessionDate) ?? [];
     list.push(s);
     bySession.set(s.sessionDate, list);

@@ -167,6 +167,14 @@ begin
 end
 $$;
 
+-- A set's role in the session. Only 'working' sets feed 1RM estimates,
+-- progressive-overload PRs, and training volume; see lib/set-types.ts for why.
+alter table strength_sets add column if not exists set_type text not null default 'working';
+
+alter table strength_sets drop constraint if exists strength_sets_set_type_check;
+alter table strength_sets add constraint strength_sets_set_type_check
+  check (set_type in ('working', 'warmup', 'dropset', 'burnout'));
+
 create index if not exists strength_sets_session_idx on strength_sets (session_id);
 create index if not exists strength_sets_exercise_idx
   on strength_sets (exercise_id, created_at desc);

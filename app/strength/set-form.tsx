@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import { SET_TYPES, SET_TYPE_LABELS } from "@/lib/set-types";
 import { logSet } from "./actions";
 
 function nowForInput() {
@@ -36,7 +37,7 @@ export function SetForm() {
           <input name="muscleGroup" type="text" placeholder="push" className={inputClass} />
         </label>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="text-muted">Weight lb (0 = bodyweight)</span>
           <input name="weightLb" type="number" step="2.5" min="0" inputMode="decimal" placeholder="135" className={inputClass} />
@@ -44,6 +45,16 @@ export function SetForm() {
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="text-muted">Reps</span>
           <input required name="reps" type="number" step="1" min="1" inputMode="numeric" placeholder="5" className={inputClass} />
+        </label>
+        <label className="col-span-2 flex flex-col gap-1.5 text-sm sm:col-span-1">
+          <span className="text-muted">Set type</span>
+          <select name="setType" defaultValue="working" className={inputClass}>
+            {SET_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {SET_TYPE_LABELS[type]}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
       <div className="grid grid-cols-3 gap-4">

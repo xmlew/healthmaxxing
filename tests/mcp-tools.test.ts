@@ -177,6 +177,41 @@ test("strength tools are registered and round-trip a logged set", async () => {
   assert.equal(del.ok, true, "delete_set removes the set");
 });
 
+test("non-working sets are recorded but excluded from volume and 1RM", async () => {
+  // Warm-up deliberately heavier than the working set: if it leaked into the
+  // derived numbers it would dominate both of them.
+  await callTool("log_set", {
+    exercise: STRENGTH_TEST_EXERCISE,
+    reps: 5,
+    weight_lb: 200,
+    type: "warmup",
+    muscle_group: "push",
+  });
+  await callTool("log_set", {
+    exercise: STRENGTH_TEST_EXERCISE,
+    reps: 5,
+    weight_lb: 100,
+    muscle_group: "push",
+  });
+
+  const history = await callTool<{
+    sessions: { volumeLb: number; sets: { setType: string; estimated1RMLb: number | null }[] }[];
+  }>("get_exercise_history", { exercise: STRENGTH_TEST_EXERCISE });
+  const session = history.sessions[history.sessions.length - 1];
+
+  assert.equal(session.sets.length, 2, "both sets are listed");
+  const warmup = session.sets.find((s) => s.setType === "warmup");
+  assert.ok(warmup, "the warm-up is still recorded");
+  assert.equal(warmup.estimated1RMLb, null, "a warm-up carries no 1RM estimate");
+  assert.equal(session.volumeLb, 500, "volume counts the working set only (100*5)");
+
+  const oneRm = await callTool<{ currentLb: number }>("get_1rm_estimate", {
+    exercise: STRENGTH_TEST_EXERCISE,
+  });
+  // Epley on the 100 lb working set, not the 200 lb warm-up (which would be 233.3).
+  assert.equal(oneRm.currentLb, 116.7, "1RM comes from the working set");
+});
+
 test("get_recovery returns a recovery analysis shape", async () => {
   const data = await callTool<{ days: number; series: unknown[]; flag: { status: string } }>("get_recovery", {
     days: 30,

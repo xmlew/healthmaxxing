@@ -1,7 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { addSet, deleteSet, nextSetNumber, resolveManualSession, upsertExercise } from "@/lib/strength";
+import {
+  addSet,
+  deleteSet,
+  nextSetNumber,
+  resolveManualSession,
+  upsertExercise,
+} from "@/lib/strength";
+import { SET_TYPES, WORKING_SET_TYPE, type SetType } from "@/lib/set-types";
 import { dayKeyInZone } from "@/lib/time";
 import { lbToKg } from "@/lib/units";
 
@@ -15,6 +22,11 @@ function num(formData: FormData, key: string): number | null {
 function str(formData: FormData, key: string): string | null {
   const raw = formData.get(key);
   return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+}
+
+function setType(formData: FormData): SetType {
+  const raw = str(formData, "setType");
+  return SET_TYPES.find((t) => t === raw) ?? WORKING_SET_TYPE;
 }
 
 // Mirrors the log_set MCP tool: resolve/create the exercise and the day's
@@ -35,6 +47,7 @@ export async function logSet(formData: FormData) {
     sessionId,
     exerciseId,
     setNumber,
+    setType: setType(formData),
     weightKg: lbToKg(num(formData, "weightLb") ?? 0),
     reps,
     rpe: num(formData, "rpe"),

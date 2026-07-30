@@ -7,6 +7,7 @@ import {
   type StrengthSetRow,
 } from "@/lib/strength";
 import { displayLb, displayVolumeLb } from "@/lib/units";
+import { isWorkingSet, SET_TYPE_LABELS } from "@/lib/set-types";
 import { SetForm } from "./set-form";
 import { removeSet } from "./actions";
 
@@ -31,7 +32,9 @@ function summarizeSessions(sets: StrengthSetRow[]): SessionSummary[] {
   return [...bySession.entries()]
     .map(([date, rows]) => ({
       date,
-      volumeLb: displayVolumeLb(rows.reduce((sum, r) => sum + (r.weightKg ?? 0) * (r.reps ?? 0), 0)),
+      volumeLb: displayVolumeLb(
+        rows.filter(isWorkingSet).reduce((sum, r) => sum + (r.weightKg ?? 0) * (r.reps ?? 0), 0),
+      ),
       sets: rows,
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -144,6 +147,11 @@ export default async function StrengthPage() {
                             <span className="tabular-nums">
                               {set.weightKg != null ? `${displayLb(set.weightKg)} lb` : "-"}
                               {set.reps != null ? ` x ${set.reps}` : ""}
+                              {isWorkingSet(set) ? null : (
+                                <span className="ml-2 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted">
+                                  {SET_TYPE_LABELS[set.setType]}
+                                </span>
+                              )}
                               {set.rpe != null ? <span className="ml-2 text-muted">RPE {set.rpe}</span> : null}
                             </span>
                             <form action={removeSet.bind(null, String(set.setId))}>

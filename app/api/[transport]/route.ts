@@ -43,6 +43,7 @@ import {
   ONE_RM_FORMULAS,
   type StrengthSetRow,
 } from "@/lib/strength";
+import { isWorkingSet, SET_TYPES } from "@/lib/set-types";
 import { dayKeyInZone, kjToKcal, TIME_ZONE } from "@/lib/time";
 import { displayLb, displayVolumeLb, kgToLb, lbToKg } from "@/lib/units";
 
@@ -558,11 +559,12 @@ const handler = createMcpHandler(
       {
         title: "Log a strength set",
         description:
-          "Record one working set of a strength exercise. To record a whole session, prefer log_workout - it takes every exercise in a single call. `exercise` and `reps` required; `weight_lb` in pounds (0 for bodyweight), `rpe`/`rir` optional. `muscle_group` (e.g. push/pull/legs or a specific muscle) is stored on the exercise the first time you name it. `set_number` auto-increments within the day's session if omitted. `date` (ISO) defaults to now; all sets on one calendar day share one session.",
+          "Record one set of a strength exercise. To record a whole session, prefer log_workout - it takes every exercise in a single call. `exercise` and `reps` required; `weight_lb` in pounds (0 for bodyweight), `rpe`/`rir` optional. `type` marks the set's role: only 'working' sets count toward 1RM estimates, PRs, and volume - use 'warmup', 'dropset', or 'burnout' so they are recorded without distorting progress. `muscle_group` (e.g. push/pull/legs or a specific muscle) is stored on the exercise the first time you name it. `set_number` auto-increments within the day's session if omitted. `date` (ISO) defaults to now; all sets on one calendar day share one session.",
         inputSchema: {
           exercise: z.string().min(1),
           reps: z.number().int().positive(),
           weight_lb: z.number().finite().nonnegative().default(0),
+          type: z.enum(SET_TYPES).default("working"),
           rpe: z.number().finite().min(0).max(10).optional(),
           rir: z.number().finite().min(0).max(10).optional(),
           muscle_group: z.string().optional(),
@@ -570,7 +572,7 @@ const handler = createMcpHandler(
           date: z.string().optional(),
         },
       },
-      async ({ exercise, reps, weight_lb, rpe, rir, muscle_group, set_number, date }) => {
+      async ({ exercise, reps, weight_lb, type, rpe, rir, muscle_group, set_number, date }) => {
         const at = resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         const sessionDate = dayKeyInZone(new Date(at.iso));
@@ -581,6 +583,7 @@ const handler = createMcpHandler(
           sessionId,
           exerciseId,
           setNumber,
+          setType: type,
           weightKg: lbToKg(weight_lb),
           reps,
           rpe: rpe ?? null,
@@ -593,9 +596,10 @@ const handler = createMcpHandler(
           sessionDate,
           exercise: exercise.trim(),
           setNumber,
+          setType: type,
           weightLb: weight_lb,
           reps,
-          estimated1RMLb: round1(estimate1RM(weight_lb, reps)),
+          estimated1RMLb: type === "working" ? round1(estimate1RM(weight_lb, reps)) : null,
         });
       }
     );
@@ -605,7 +609,7 @@ const handler = createMcpHandler(
       {
         title: "Exercise history",
         description:
-          "Sets for one exercise over N days, grouped by session, with each set's `setId` (required to delete it via delete_set), estimated 1RM, per-session total volume (sum of weight x reps), and each session's best estimated 1RM. All weights and volumes are in pounds. `formula` selects the 1RM estimator (epley or brzycki).",
+          "Sets for one exercise over N days, grouped by session, with each set's `setId` (required to delete it via delete_set), `setType`, estimated 1RM, per-session working volume (sum of weight x reps), and each session's best estimated 1RM. All weights and volumes are in pounds. Warm-up, drop, and burnout sets are listed but excluded from volume and 1RM. `formula` selects the 1RM estimator (epley or brzycki).",
         inputSchema: {
           exercise: z.string().min(1),
           days: z.number().int().positive().max(365).default(90),
@@ -627,16 +631,19 @@ const handler = createMcpHandler(
           const setsOut = rows.map((r) => ({
             setId: r.setId,
             setNumber: r.setNumber,
+            setType: r.setType,
             weightLb: r.weightKg != null ? displayLb(r.weightKg) : null,
             reps: r.reps,
             rpe: r.rpe,
             rir: r.rir,
             estimated1RMLb:
-              r.weightKg != null && r.reps != null
+              isWorkingSet(r) && r.weightKg != null && r.reps != null
                 ? round1(kgToLb(estimate1RM(r.weightKg, r.reps, formula)))
                 : null,
           }));
-          const volumeKg = rows.reduce((sum, r) => sum + (r.weightKg ?? 0) * (r.reps ?? 0), 0);
+          const volumeKg = rows
+            .filter(isWorkingSet)
+            .reduce((sum, r) => sum + (r.weightKg ?? 0) * (r.reps ?? 0), 0);
           const bestEstimated1RMLb = setsOut.reduce<number | null>(
             (best, s) =>
               s.estimated1RMLb != null && (best == null || s.estimated1RMLb > best) ? s.estimated1RMLb : best,
