@@ -8,7 +8,7 @@ config({ path: join(process.cwd(), ".env.local") });
 type ExerciseSeed = {
   name: string;
   sets: number;
-  reps: number | null;
+  reps: number;
   weightLb: number;
   notes?: string;
 };
@@ -54,7 +54,7 @@ const PPL_V1: RoutineSeed = {
         { name: "Romanian Deadlift", sets: 3, reps: 8, weightLb: 115 },
         { name: "Leg Extension", sets: 3, reps: 10, weightLb: 145 },
         { name: "Leg Curl", sets: 3, reps: 10, weightLb: 65 },
-        { name: "Seated Calf Raise", sets: 3, reps: null, weightLb: 105, notes: "Baseline reps were not recorded" },
+        { name: "Seated Calf Raise", sets: 3, reps: 12, weightLb: 105 },
         { name: "Hanging Knee Raise", sets: 3, reps: 12, weightLb: 0, notes: "Bodyweight" },
       ],
     },
