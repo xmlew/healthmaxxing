@@ -215,13 +215,17 @@ test("strength tools are registered and round-trip a logged set", async () => {
 test("non-working sets are recorded but excluded from volume and 1RM", async () => {
   // Warm-up deliberately heavier than the working set: if it leaked into the
   // derived numbers it would dominate both of them.
-  await callTool("log_set", {
+  //
+  // The previous test's session was tidied away when its last set was deleted,
+  // so these open a new one - track it, or teardown leaves it behind.
+  const opened = await callTool<{ sessionId: number }>("log_set", {
     exercise: STRENGTH_TEST_EXERCISE,
     reps: 5,
     weight_lb: 200,
     type: "warmup",
     muscle_group: "push",
   });
+  workoutTestSessionIds.push(opened.sessionId);
   await callTool("log_set", {
     exercise: STRENGTH_TEST_EXERCISE,
     reps: 5,
