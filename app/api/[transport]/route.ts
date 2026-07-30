@@ -47,15 +47,12 @@ import {
 } from "@/lib/strength";
 import { isWorkingSet, SET_TYPES } from "@/lib/set-types";
 import {
-  getLastPerformances,
   getRoutine,
   getRoutineDay,
+  getRoutinePlan,
   getRoutineTargets,
-  lastSessionDateForDay,
   listRoutineDays,
-  nextDayInRotation,
   setSessionRoutineDay,
-  suggestProgression,
   upsertRoutineTarget,
   type RoutineDay,
 } from "@/lib/routines";
@@ -634,60 +631,34 @@ const handler = createMcpHandler(
         },
       },
       async ({ day, routine }) => {
-        const found = await getRoutine(routine);
-        if (!found) {
-          return fail(
-            routine
-              ? `No routine named "${routine}". Run "npm run db:seed-routine" or check list_exercises for what has been logged.`
-              : "No routine configured yet. Run \"npm run db:seed-routine\" to create the PPL baseline.",
-          );
-        }
-
-        const resolvedDay = day
-          ? await getRoutineDay(found.id, day)
-          : await nextDayInRotation(found.id);
-        if (!resolvedDay) {
-          const days = await listRoutineDays(found.id);
-          return fail(
-            `No day "${day}" in routine "${found.name}". Days: ${days.map((d) => d.name).join(", ") || "none"}.`,
-          );
-        }
-
-        const targets = await getRoutineTargets(resolvedDay.id);
-        const [lastByExercise, lastTrained] = await Promise.all([
-          getLastPerformances(targets.map((t) => t.exerciseId)),
-          lastSessionDateForDay(resolvedDay.id),
-        ]);
+        const plan = await getRoutinePlan({ routine, day });
+        if ("message" in plan) return fail(plan.message);
 
         return ok({
-          routine: found.name,
-          day: resolvedDay.name,
-          dayChosenBy: day ? "requested" : "next in rotation",
-          lastTrained,
-          exercises: targets.map((t) => {
-            const last = lastByExercise.get(t.exerciseId);
-            const progression = suggestProgression(t, last);
-            return {
-              exercise: t.exerciseName,
-              muscleGroup: t.muscleGroup,
-              targetSets: t.targetSets,
-              targetReps: t.targetReps,
-              targetWeightLb: t.targetWeightKg != null ? displayLb(t.targetWeightKg) : null,
-              notes: t.notes,
-              lastSession: last
-                ? {
-                    date: last.date,
-                    sets: last.sets.map((s) => ({
-                      setNumber: s.setNumber,
-                      setType: s.setType,
-                      weightLb: s.weightKg != null ? displayLb(s.weightKg) : null,
-                      reps: s.reps,
-                    })),
-                  }
-                : null,
-              suggestion: progression,
-            };
-          }),
+          routine: plan.routineName,
+          day: plan.dayName,
+          dayChosenBy: plan.dayWasRequested ? "requested" : "next in rotation",
+          lastTrained: plan.lastTrained,
+          exercises: plan.exercises.map((e) => ({
+            exercise: e.exerciseName,
+            muscleGroup: e.muscleGroup,
+            targetSets: e.targetSets,
+            targetReps: e.targetReps,
+            targetWeightLb: e.targetWeightKg != null ? displayLb(e.targetWeightKg) : null,
+            notes: e.notes,
+            lastSession: e.last
+              ? {
+                  date: e.last.date,
+                  sets: e.last.sets.map((s) => ({
+                    setNumber: s.setNumber,
+                    setType: s.setType,
+                    weightLb: s.weightKg != null ? displayLb(s.weightKg) : null,
+                    reps: s.reps,
+                  })),
+                }
+              : null,
+            suggestion: e.progression,
+          })),
         });
       }
     );

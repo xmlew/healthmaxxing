@@ -8,6 +8,7 @@ import {
 } from "@/lib/strength";
 import { displayLb, displayVolumeLb } from "@/lib/units";
 import { isWorkingSet, SET_TYPE_LABELS } from "@/lib/set-types";
+import { RoutinePlan } from "./routine-plan";
 import { SetForm } from "./set-form";
 import { removeSet } from "./actions";
 
@@ -71,6 +72,8 @@ export default async function StrengthPage() {
         </p>
       </header>
 
+      <RoutinePlan />
+
       <div className="rounded-3xl border border-border bg-surface p-6">
         <h2 className="mb-4 font-display text-xl">Log a set</h2>
         <SetForm />
@@ -78,8 +81,9 @@ export default async function StrengthPage() {
 
       {active.length === 0 ? (
         <div className="rounded-3xl border border-border bg-surface p-8 text-center text-sm text-muted">
-          No strength sets logged yet. Use the form above, the <code>log_set</code> MCP tool (e.g.
-          from Claude), or import an Apple Health &ldquo;Traditional Strength Training&rdquo; workout.
+          No strength sets logged yet. Use the form above, the <code>log_workout</code> MCP tool to
+          record a whole session from Claude, or import an Apple Health &ldquo;Traditional Strength
+          Training&rdquo; workout.
         </div>
       ) : (
         active.map(({ exercise, sets, oneRm, overload }) => {

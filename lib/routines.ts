@@ -259,6 +259,81 @@ export function suggestProgression(
   };
 }
 
+export type PlannedExercise = {
+  exerciseName: string;
+  muscleGroup: string | null;
+  targetSets: number | null;
+  targetReps: number | null;
+  targetWeightKg: number | null;
+  notes: string | null;
+  last: LastPerformance | null;
+  progression: Progression;
+};
+
+export type RoutinePlan = {
+  routineName: string;
+  dayName: string;
+  dayWasRequested: boolean;
+  lastTrained: string | null;
+  exercises: PlannedExercise[];
+};
+
+// Assembled once and shared by the MCP tool and the /strength page, so both
+// answer "what am I training and what should I hit" identically. Returns a
+// message rather than throwing: a missing routine or a mistyped day is
+// something to show the caller, not an error page.
+export async function getRoutinePlan(opts: {
+  routine?: string;
+  day?: string;
+}): Promise<RoutinePlan | { message: string }> {
+  const routine = await getRoutine(opts.routine);
+  if (!routine) {
+    return {
+      message: opts.routine
+        ? `No routine named "${opts.routine}".`
+        : 'No routine configured yet. Run "npm run db:seed-routine" to create the PPL baseline.',
+    };
+  }
+
+  const day = opts.day
+    ? await getRoutineDay(routine.id, opts.day)
+    : await nextDayInRotation(routine.id);
+  if (!day) {
+    const days = await listRoutineDays(routine.id);
+    return {
+      message: `No day "${opts.day}" in routine "${routine.name}". Days: ${
+        days.map((d) => d.name).join(", ") || "none"
+      }.`,
+    };
+  }
+
+  const targets = await getRoutineTargets(day.id);
+  const [lastByExercise, lastTrained] = await Promise.all([
+    getLastPerformances(targets.map((t) => t.exerciseId)),
+    lastSessionDateForDay(day.id),
+  ]);
+
+  return {
+    routineName: routine.name,
+    dayName: day.name,
+    dayWasRequested: opts.day != null,
+    lastTrained,
+    exercises: targets.map((t) => {
+      const last = lastByExercise.get(t.exerciseId);
+      return {
+        exerciseName: t.exerciseName,
+        muscleGroup: t.muscleGroup,
+        targetSets: t.targetSets,
+        targetReps: t.targetReps,
+        targetWeightKg: t.targetWeightKg,
+        notes: t.notes,
+        last: last ?? null,
+        progression: suggestProgression(t, last),
+      };
+    }),
+  };
+}
+
 export async function lastSessionDateForDay(dayId: number): Promise<string | null> {
   const rows = await sql`
     select to_char(max(session_date), 'YYYY-MM-DD') as date
