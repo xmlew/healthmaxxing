@@ -12,21 +12,36 @@ strength sets, and shows trends against a weight-loss or muscle-building goal.
 | `/` | Today's steps, active/basal energy, sleep, resting HR, calories in vs. out, protein vs. target, and progress toward your goal - plus banners when resting HR spikes above its 30-day baseline or protein is under target |
 | `/trends` | Weight vs. goal, a lean-mass-vs-fat-mass overlay, calories in vs. out, steps, sleep, resting heart rate, and HRV over 7/30/90 days |
 | `/recovery` | Resting HR and HRV overlaid on daily training load, plus weekly strength volume per muscle group, over 7/30/90 days - with an overtraining flag and an overreaching flag when a muscle group's volume stays elevated while HRV declines |
-| `/strength` | Per-exercise history and estimated 1RM (Epley) over time, with recent sessions (top set + volume) and a stall badge when best-set volume plateaus |
+| `/strength` | The next session in your routine - each exercise's target, what you logged for it last time, and whether to advance or repeat - then per-exercise history and estimated 1RM (Epley) over time, with recent sessions (top set + volume) and a stall badge when best-set volume plateaus |
 | `/tdee` | Estimated TDEE (active + basal energy) vs. logged calories: daily and rolling net balance, cumulative deficit/surplus, and implied weight change |
 | `/correlations` | Pearson correlation for curated daily-series pairings (sleep vs. next-day resting HR, steps vs. weight-loss rate), with a "not enough data" guard when paired points are too few |
 | `/log` | Manual weight/body-composition (body fat %, muscle mass, waist) and food (with macros) entries, with delete |
 | `/goals` | Training phase (cut/bulk/recomp/maintenance), starting/target weight, target date, daily calorie and protein targets, with a phase-aware pace check (flags loss too fast on a cut, gain too fast on a bulk) |
 | `/workouts` | Imported workouts list + per-workout detail (duration, distance, energy, heart rate) |
 | `POST /api/ingest` | Where Health Auto Export's REST API automation posts to, protected by a bearer-token secret (`INGEST_SECRET`) |
-| `/api/mcp` | Remote MCP server exposing the same data to Claude as tools - query trends, analyze recovery/TDEE/correlations/anomalies, log weight/food/strength sets, track macros and progressive overload, manage goals - protected by `MCP_SECRET` |
+| `/api/mcp` | Remote MCP server exposing the same data to Claude as tools - query trends, analyze recovery/TDEE/correlations/anomalies, log a whole workout or a single set, plan the next session from a routine, log weight/food, track macros and progressive overload, manage goals - protected by `MCP_SECRET` |
 
 **Data model** (`db/schema.sql`): `health_metric_samples` (every Apple Health
 metric, generic name/unit/qty/min/avg/max + raw JSON payload), `workouts`,
 `weight_logs` (weight + body fat %, skeletal muscle mass, waist), `food_logs`
 (calories + protein/carbs/fat), a normalized `exercises` table with
-`strength_sessions` and `strength_sets`, and a single-row `goals` table
-(weight targets + training phase + calorie/protein targets).
+`strength_sessions` and `strength_sets`, `routines`/`routine_days`/
+`routine_exercises` holding the plan those sessions are measured against, and a
+single-row `goals` table (weight targets + training phase + calorie/protein
+targets).
+
+**Units**: lift weights are entered and displayed in pounds but stored in
+kilograms (`strength_sets.weight_kg`), the same unit as `weight_logs` and Apple
+Health, so training volume stays summable and no row's unit has to be inferred.
+Conversion lives in `lib/units.ts` and happens only at the edges - MCP tool
+arguments and rendered output. Every field name carries its unit (`weight_kg`,
+`volumeLb`).
+
+**Set types**: each set is `working`, `warmup`, `dropset`, or `burnout`
+(`lib/set-types.ts`). Only working sets count toward 1RM estimates,
+progressive-overload PRs, and volume - a heavy warm-up before a lighter top set
+would otherwise read as the day's best effort. Non-working sets are still
+stored and shown, badged on `/strength`.
 
 **Stack**: Next.js 16 (App Router, Turbopack), React 19, Tailwind v4,
 Recharts, Postgres via the plain `postgres` driver (works against any local
@@ -54,7 +69,14 @@ deployment URL as private, and change `INGEST_SECRET` if it ever leaks.
    npm install
    npm run db:migrate
    ```
-4. Run the app:
+4. Optionally seed the PPL training routine:
+   ```bash
+   npm run db:seed-routine
+   ```
+   This creates the push/pull/legs days and their starting targets. It only
+   inserts targets that are missing, so re-running it never undoes a
+   progression you've made.
+5. Run the app:
    ```bash
    npm run dev
    ```
@@ -113,9 +135,16 @@ queries as the dashboard, over Streamable HTTP, protected by a bearer token.
 Tools: `get_today_summary`, `get_trends`, `get_goal_status`, `list_workouts`,
 `get_workout_detail`, `get_recent_logs`, `get_recovery`, `get_tdee`,
 `get_correlation`, `get_anomalies`, `get_exercise_history`, `get_1rm_estimate`,
-`get_progressive_overload_status`, `get_macro_summary` (read); `log_weight`
-(weight + body composition), `log_food` (with macros), `log_set`, `set_goal`,
-`delete_weight_log`, `delete_food_log` (write).
+`get_progressive_overload_status`, `get_macro_summary`, `get_routine`,
+`list_exercises` (read); `log_weight` (weight + body composition), `log_food`
+(with macros), `log_workout`, `log_set`, `set_routine_target`, `set_goal`,
+`delete_weight_log`, `delete_food_log`, `delete_set` (write).
+
+`log_workout` records an entire session in one call - a five-exercise push day
+is one round trip instead of fifteen - and writes every set in a single insert,
+so a failure cannot leave half a session behind. `get_routine` answers the other
+half: what to train next and what to hit, with each exercise's target, its last
+performance, and a suggestion to advance or repeat.
 
 Set `MCP_SECRET` in `.env.local` (`openssl rand -base64 32`), then register it
 with Claude Code:
@@ -166,10 +195,14 @@ or food has been logged for real.
   didn't include body weight or nutrition metrics. If a future export
   includes a body-weight metric, it lands in `health_metric_samples`
   alongside everything else rather than merging into `weight_logs`.
-- Strength sets are logged through the `log_set` MCP tool (e.g. from Claude),
-  not a web form yet; a same-day Apple Health "Traditional Strength Training"
+- Strength sets are logged through `log_workout` / `log_set` from Claude or the
+  form on `/strength`; a same-day Apple Health "Traditional Strength Training"
   workout auto-links a session. Volume math uses logged weight, so bodyweight-
   only sets (weight 0) currently count as zero load.
+- Progression suggests a flat +5 lb once a target is met on every working set.
+  That is the smallest jump most gym equipment offers; a percentage would make
+  light isolation work unprogressable and jump heavy compounds too far. Override
+  any individual target with `set_routine_target`.
 - No authentication on the dashboard - anyone with the URL can view and log
   data. Fine for a private/unlisted deployment; worth revisiting before
   sharing the link with anyone.
