@@ -106,6 +106,7 @@ async function callTool<T = Record<string, unknown>>(
 
 before(async () => {
   assert.ok(SECRET, "MCP_SECRET must be set in .env.local for the test");
+  await removeSentinels();
   server = spawn("npx", ["next", "start", "-p", String(PORT)], {
     stdio: "ignore",
     env: process.env,
@@ -118,8 +119,9 @@ after(() => {
 });
 
 // Remove every sentinel row these tests write, by exact match, so the shared dev
-// DB is left as it was found.
-after(async () => {
+// DB is left as it was found. Runs before the suite as well as after it: a run
+// that dies mid-way would otherwise poison the next one with leftover sets.
+async function removeSentinels(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) return;
   await withSql(async (sql) => {
@@ -129,7 +131,8 @@ after(async () => {
     await sql`delete from strength_sets where exercise_id in (select id from exercises where name = any(${TEST_EXERCISES}))`;
     await sql`delete from exercises where name = any(${TEST_EXERCISES})`;
     // Sessions are matched by id, and only when now empty - never other empty
-    // manual sessions on the shared DB.
+    // manual sessions on the shared DB. A crashed run can leave one behind; it
+    // holds no sets, and the next run's ids will not collide with it.
     const sessionIds = [strengthTestSessionId, ...workoutTestSessionIds].filter(
       (id): id is number => id != null,
     );
@@ -142,7 +145,9 @@ after(async () => {
       `;
     }
   });
-});
+}
+
+after(removeSentinels);
 
 test("tools/list exposes the four new analysis tools", async () => {
   const { body } = await rpc("tools/list", {});
