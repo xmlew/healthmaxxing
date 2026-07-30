@@ -179,6 +179,59 @@ create index if not exists strength_sets_session_idx on strength_sets (session_i
 create index if not exists strength_sets_exercise_idx
   on strength_sets (exercise_id, created_at desc);
 
+-- A routine is a named rotation of training days (Push/Pull/Legs), each day an
+-- ordered list of exercises with the targets to hit. Targets are the plan;
+-- strength_sets stay the record of what actually happened, so a missed session
+-- never rewrites what you meant to do. Routines are versioned by name
+-- ("PPL v1.0"), and the most recently created one is the current plan.
+create table if not exists routines (
+  id bigserial primary key,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists routines_name_lower_key on routines (lower(name));
+
+create table if not exists routine_days (
+  id bigserial primary key,
+  routine_id bigint not null references routines (id) on delete cascade,
+  name text not null,
+  position integer not null,
+  created_at timestamptz not null default now()
+);
+
+-- Days are addressed by name within a routine ("push"), and ordered by position
+-- so the next day in the rotation is well defined.
+create unique index if not exists routine_days_routine_name_key
+  on routine_days (routine_id, lower(name));
+
+create table if not exists routine_exercises (
+  id bigserial primary key,
+  day_id bigint not null references routine_days (id) on delete cascade,
+  exercise_id bigint not null references exercises (id),
+  position integer not null,
+  target_sets integer,
+  target_reps integer,
+  target_weight_kg double precision,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists routine_exercises_day_exercise_key
+  on routine_exercises (day_id, exercise_id);
+
+-- Which routine day a session was. Without it the rotation cannot be advanced:
+-- "what is next" is answered by looking at what the last session was.
+alter table strength_sessions add column if not exists routine_day_id bigint;
+
+-- History outlives the plan. Retiring a routine must neither be blocked by the
+-- sessions logged against it nor delete them: the training happened, and the
+-- routine day was only the label it was filed under. Dropped and re-added so an
+-- already-migrated database picks up the delete behavior.
+alter table strength_sessions drop constraint if exists strength_sessions_routine_day_id_fkey;
+alter table strength_sessions add constraint strength_sessions_routine_day_id_fkey
+  foreign key (routine_day_id) references routine_days (id) on delete set null;
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,

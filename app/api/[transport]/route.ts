@@ -46,6 +46,19 @@ import {
   type StrengthSetRow,
 } from "@/lib/strength";
 import { isWorkingSet, SET_TYPES } from "@/lib/set-types";
+import {
+  getLastPerformances,
+  getRoutine,
+  getRoutineDay,
+  getRoutineTargets,
+  lastSessionDateForDay,
+  listRoutineDays,
+  nextDayInRotation,
+  setSessionRoutineDay,
+  suggestProgression,
+  upsertRoutineTarget,
+  type RoutineDay,
+} from "@/lib/routines";
 import { dayKeyInZone, kjToKcal, TIME_ZONE } from "@/lib/time";
 import { displayLb, displayVolumeLb, kgToLb, lbToKg } from "@/lib/units";
 
@@ -610,11 +623,136 @@ const handler = createMcpHandler(
     );
 
     server.registerTool(
+      "get_routine",
+      {
+        title: "Today's routine",
+        description:
+          "What to train and what to hit. Returns a routine day's exercises in order with their target sets/reps/weight (pounds), what was actually logged for each one last time, and a per-exercise suggestion: advance the weight when the last session met the target on every working set, otherwise repeat it. Omit `day` to get the next day in the rotation, chosen from what was logged most recently. Omit `routine` to use the current plan. Call this before training, then pass the same `day` to log_workout.",
+        inputSchema: {
+          day: z.string().optional(),
+          routine: z.string().optional(),
+        },
+      },
+      async ({ day, routine }) => {
+        const found = await getRoutine(routine);
+        if (!found) {
+          return fail(
+            routine
+              ? `No routine named "${routine}". Run "npm run db:seed-routine" or check list_exercises for what has been logged.`
+              : "No routine configured yet. Run \"npm run db:seed-routine\" to create the PPL baseline.",
+          );
+        }
+
+        const resolvedDay = day
+          ? await getRoutineDay(found.id, day)
+          : await nextDayInRotation(found.id);
+        if (!resolvedDay) {
+          const days = await listRoutineDays(found.id);
+          return fail(
+            `No day "${day}" in routine "${found.name}". Days: ${days.map((d) => d.name).join(", ") || "none"}.`,
+          );
+        }
+
+        const targets = await getRoutineTargets(resolvedDay.id);
+        const [lastByExercise, lastTrained] = await Promise.all([
+          getLastPerformances(targets.map((t) => t.exerciseId)),
+          lastSessionDateForDay(resolvedDay.id),
+        ]);
+
+        return ok({
+          routine: found.name,
+          day: resolvedDay.name,
+          dayChosenBy: day ? "requested" : "next in rotation",
+          lastTrained,
+          exercises: targets.map((t) => {
+            const last = lastByExercise.get(t.exerciseId);
+            const progression = suggestProgression(t, last);
+            return {
+              exercise: t.exerciseName,
+              muscleGroup: t.muscleGroup,
+              targetSets: t.targetSets,
+              targetReps: t.targetReps,
+              targetWeightLb: t.targetWeightKg != null ? displayLb(t.targetWeightKg) : null,
+              notes: t.notes,
+              lastSession: last
+                ? {
+                    date: last.date,
+                    sets: last.sets.map((s) => ({
+                      setNumber: s.setNumber,
+                      setType: s.setType,
+                      weightLb: s.weightKg != null ? displayLb(s.weightKg) : null,
+                      reps: s.reps,
+                    })),
+                  }
+                : null,
+              suggestion: progression,
+            };
+          }),
+        });
+      }
+    );
+
+    server.registerTool(
+      "set_routine_target",
+      {
+        title: "Update a routine target",
+        description:
+          "Change what an exercise in a routine day aims for - the weight after a successful progression, a different rep target, or a note. Weights are pounds. Only the fields you pass change; the rest keep their stored values. Adds the exercise to the day if it is not already in it.",
+        inputSchema: {
+          day: z.string().min(1),
+          exercise: z.string().min(1),
+          target_sets: z.number().int().positive().optional(),
+          target_reps: z.number().int().positive().optional(),
+          target_weight_lb: z.number().finite().nonnegative().optional(),
+          notes: z.string().optional(),
+          routine: z.string().optional(),
+        },
+      },
+      async ({ day, exercise, target_sets, target_reps, target_weight_lb, notes, routine }) => {
+        const found = await getRoutine(routine);
+        if (!found) return fail("No routine configured yet.");
+        const resolvedDay = await getRoutineDay(found.id, day);
+        if (!resolvedDay) {
+          const days = await listRoutineDays(found.id);
+          return fail(
+            `No day "${day}" in routine "${found.name}". Days: ${days.map((d) => d.name).join(", ") || "none"}.`,
+          );
+        }
+
+        const name = exercise.trim();
+        const exerciseId = await upsertExercise({ name });
+        await upsertRoutineTarget({
+          dayId: resolvedDay.id,
+          exerciseId,
+          targetSets: target_sets ?? null,
+          targetReps: target_reps ?? null,
+          targetWeightKg: target_weight_lb != null ? lbToKg(target_weight_lb) : null,
+          notes: notes ?? null,
+        });
+
+        const updated = (await getRoutineTargets(resolvedDay.id)).find(
+          (t) => t.exerciseId === exerciseId,
+        );
+        return ok({
+          ok: true,
+          routine: found.name,
+          day: resolvedDay.name,
+          exercise: name,
+          targetSets: updated?.targetSets ?? null,
+          targetReps: updated?.targetReps ?? null,
+          targetWeightLb:
+            updated?.targetWeightKg != null ? displayLb(updated.targetWeightKg) : null,
+          notes: updated?.notes ?? null,
+        });
+      }
+    );
+
+    server.registerTool(
       "log_workout",
       {
         title: "Log a whole workout",
         description:
-          "Record an entire training session in one call - every exercise, every set. Prefer this over repeated log_set calls: a 5-exercise push day is one call instead of fifteen, and all its sets are written together so a failure cannot leave half a session logged. Weights are pounds (0 for bodyweight). Each set's `type` defaults to 'working'; mark warm-ups, drop sets, and burnouts so they are recorded without distorting PRs or volume. `date` (ISO) defaults to now; sets join the existing session if that calendar day already has one. Returns per-exercise working volume, top set, estimated 1RM, and whether each beat its previous best.",
+          "Record an entire training session in one call - every exercise, every set. Prefer this over repeated log_set calls: a 5-exercise push day is one call instead of fifteen, and all its sets are written together so a failure cannot leave half a session logged. Weights are pounds (0 for bodyweight). Each set's `type` defaults to 'working'; mark warm-ups, drop sets, and burnouts so they are recorded without distorting PRs or volume. Pass `day` (e.g. push/pull/legs) to tag the session with the routine day you trained - that is what lets get_routine advance the rotation. `date` (ISO) defaults to now; sets join the existing session if that calendar day already has one. Returns per-exercise working volume, top set, estimated 1RM, and whether each beat its previous best.",
         inputSchema: {
           exercises: z
             .array(
@@ -635,14 +773,32 @@ const handler = createMcpHandler(
               }),
             )
             .min(1),
+          day: z.string().optional(),
+          routine: z.string().optional(),
           notes: z.string().optional(),
           date: z.string().optional(),
         },
       },
-      async ({ exercises, notes, date }) => {
+      async ({ exercises, day, routine, notes, date }) => {
         const at = resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         const sessionDate = dayKeyInZone(new Date(at.iso));
+
+        // Resolved before writing anything: naming a day that does not exist is
+        // a mistake worth reporting, not a session quietly logged untagged.
+        let routineDay: RoutineDay | null = null;
+        if (day) {
+          const found = await getRoutine(routine);
+          if (!found) return fail("No routine configured yet, so `day` cannot be resolved.");
+          routineDay = await getRoutineDay(found.id, day);
+          if (!routineDay) {
+            const days = await listRoutineDays(found.id);
+            return fail(
+              `No day "${day}" in routine "${found.name}". Days: ${days.map((d) => d.name).join(", ") || "none"}.`,
+            );
+          }
+        }
+
         const sessionId = await resolveManualSession(sessionDate);
 
         // Resolved before any write so "previous best" means before today, even
@@ -688,6 +844,7 @@ const handler = createMcpHandler(
           ),
         );
         if (notes) await setSessionNotes(sessionId, notes);
+        if (routineDay) await setSessionRoutineDay(sessionId, routineDay.id);
 
         const summary = resolved.map((ex) => {
           const working = ex.sets.filter((s) => s.type === "working");
@@ -719,6 +876,7 @@ const handler = createMcpHandler(
           ok: true,
           sessionId,
           sessionDate,
+          day: routineDay?.name ?? null,
           setsLogged: setIds.length,
           exercises: summary,
         });

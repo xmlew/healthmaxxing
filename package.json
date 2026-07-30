@@ -10,7 +10,8 @@
     "pretest": "next build",
     "test": "node --import tsx --test tests/*.test.ts",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:import": "tsx scripts/import.ts"
+    "db:import": "tsx scripts/import.ts",
+    "db:seed-routine": "tsx scripts/seed-routine.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

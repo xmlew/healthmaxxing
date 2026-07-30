@@ -14,13 +14,31 @@ const SECRET = process.env.MCP_SECRET;
 const STRENGTH_TEST_EXERCISE = "__mcp_test_lift__";
 const WORKOUT_TEST_EXERCISE = "__mcp_test_press__";
 const WORKOUT_TEST_ACCESSORY = "__mcp_test_raise__";
-const TEST_EXERCISES = [STRENGTH_TEST_EXERCISE, WORKOUT_TEST_EXERCISE, WORKOUT_TEST_ACCESSORY];
+const ROUTINE_TEST_LIFT = "__mcp_test_routine_lift__";
+const TEST_EXERCISES = [
+  STRENGTH_TEST_EXERCISE,
+  WORKOUT_TEST_EXERCISE,
+  WORKOUT_TEST_ACCESSORY,
+  ROUTINE_TEST_LIFT,
+];
+// Built and torn down by the routine test. Never the real routine: these tools
+// write, and the dev DB holds the actual training plan.
+const TEST_ROUTINE = "__mcp_test_routine__";
 let strengthTestSessionId: number | null = null;
 const workoutTestSessionIds: number[] = [];
 
 // log_workout back-dates its sessions so PR comparison spans real days.
 function daysAgoIso(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+async function withSql<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end();
+  }
 }
 
 let server: ChildProcess;
@@ -99,17 +117,19 @@ after(() => {
   server?.kill("SIGTERM");
 });
 
-// Remove the sentinel exercise/set/session the strength round-trip test wrote,
-// by exact match, so the shared dev DB is left as it was found.
+// Remove every sentinel row these tests write, by exact match, so the shared dev
+// DB is left as it was found.
 after(async () => {
   const url = process.env.DATABASE_URL;
   if (!url) return;
-  const sql = postgres(url, { max: 1 });
-  try {
+  await withSql(async (sql) => {
+    // The sentinel routine cascades to its days and targets; drop it before the
+    // exercises those targets reference.
+    await sql`delete from routines where name = ${TEST_ROUTINE}`;
     await sql`delete from strength_sets where exercise_id in (select id from exercises where name = any(${TEST_EXERCISES}))`;
     await sql`delete from exercises where name = any(${TEST_EXERCISES})`;
-    // Only the exact sessions these tests created, and only if now empty -
-    // never other empty manual sessions on the shared DB.
+    // Sessions are matched by id, and only when now empty - never other empty
+    // manual sessions on the shared DB.
     const sessionIds = [strengthTestSessionId, ...workoutTestSessionIds].filter(
       (id): id is number => id != null,
     );
@@ -121,9 +141,7 @@ after(async () => {
           and id not in (select session_id from strength_sets)
       `;
     }
-  } finally {
-    await sql.end();
-  }
+  });
 });
 
 test("tools/list exposes the four new analysis tools", async () => {
@@ -133,7 +151,7 @@ test("tools/list exposes the four new analysis tools", async () => {
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(tools.length, 23, "expected 23 tools total (22 prior + log_workout)");
+  assert.equal(tools.length, 25, "expected 25 tools total (22 prior + log_workout + get_routine + set_routine_target)");
 });
 
 test("get_macro_summary returns per-day macros and targets", async () => {
@@ -306,6 +324,135 @@ test("log_workout records a whole session in one call", async () => {
     backdated.exercises[0].previousBestEstimated1RMLb,
     171,
     "a back-dated session only sees sessions before it",
+  );
+});
+
+test("get_routine plans a day and advances the rotation", async () => {
+  await withSql(async (sql) => {
+    const [routine] = await sql`
+      insert into routines (name) values (${TEST_ROUTINE}) returning id
+    `;
+    const [exercise] = await sql`
+      insert into exercises (name, muscle_group) values (${ROUTINE_TEST_LIFT}, 'push') returning id
+    `;
+    for (const [i, name] of ["testpush", "testpull"].entries()) {
+      const [day] = await sql`
+        insert into routine_days (routine_id, name, position)
+        values (${routine.id}, ${name}, ${i + 1})
+        returning id
+      `;
+      await sql`
+        insert into routine_exercises
+          (day_id, exercise_id, position, target_sets, target_reps, target_weight_kg)
+        values (${day.id}, ${exercise.id}, 1, 3, 8, ${100 / 2.20462262185})
+      `;
+    }
+  });
+
+  const first = await callTool<{
+    day: string;
+    dayChosenBy: string;
+    lastTrained: string | null;
+    exercises: {
+      exercise: string;
+      targetSets: number;
+      targetReps: number;
+      targetWeightLb: number;
+      lastSession: unknown;
+      suggestion: { status: string; suggestedWeightLb: number | null };
+    }[];
+  }>("get_routine", { routine: TEST_ROUTINE });
+
+  assert.equal(first.day, "testpush", "with nothing logged, the rotation starts at the first day");
+  assert.equal(first.dayChosenBy, "next in rotation");
+  assert.equal(first.lastTrained, null, "the day has never been trained");
+  assert.equal(first.exercises[0].targetWeightLb, 100, "targets are reported in pounds");
+  assert.equal(first.exercises[0].lastSession, null, "no history yet");
+  assert.equal(first.exercises[0].suggestion.status, "no_history");
+
+  // Meeting the target on every working set earns the increment.
+  const workout = await callTool<{ day: string; sessionId: number }>("log_workout", {
+    routine: TEST_ROUTINE,
+    day: "testpush",
+    date: daysAgoIso(3),
+    exercises: [
+      {
+        name: ROUTINE_TEST_LIFT,
+        sets: [
+          { reps: 12, weight_lb: 70, type: "warmup" },
+          { reps: 8, weight_lb: 100 },
+          { reps: 8, weight_lb: 100 },
+          { reps: 8, weight_lb: 100 },
+        ],
+      },
+    ],
+  });
+  assert.equal(workout.day, "testpush", "the session is tagged with the routine day");
+  workoutTestSessionIds.push(workout.sessionId);
+
+  const next = await callTool<{ day: string }>("get_routine", { routine: TEST_ROUTINE });
+  assert.equal(next.day, "testpull", "the rotation advances past the day just trained");
+
+  const trained = await callTool<{
+    lastTrained: string | null;
+    exercises: {
+      lastSession: { sets: { weightLb: number; setType: string }[] } | null;
+      suggestion: { status: string; suggestedWeightLb: number | null; reason: string };
+    }[];
+  }>("get_routine", { routine: TEST_ROUTINE, day: "testpush" });
+
+  assert.ok(trained.lastTrained, "the trained day reports when it was last done");
+  assert.equal(trained.exercises[0].lastSession?.sets.length, 4, "last session shows every set");
+  assert.equal(
+    trained.exercises[0].suggestion.status,
+    "advance",
+    "hitting 3x8 at the target earns an increase",
+  );
+  assert.equal(
+    trained.exercises[0].suggestion.suggestedWeightLb,
+    105,
+    "the suggestion is one 5 lb increment up",
+  );
+
+  // A session short of the target repeats it instead.
+  const shortfall = await callTool<{ sessionId: number }>("log_workout", {
+    routine: TEST_ROUTINE,
+    day: "testpush",
+    date: daysAgoIso(1),
+    exercises: [
+      { name: ROUTINE_TEST_LIFT, sets: [{ reps: 5, weight_lb: 100 }, { reps: 5, weight_lb: 100 }] },
+    ],
+  });
+  workoutTestSessionIds.push(shortfall.sessionId);
+
+  const held = await callTool<{
+    exercises: { suggestion: { status: string; suggestedWeightLb: number | null } }[];
+  }>("get_routine", { routine: TEST_ROUTINE, day: "testpush" });
+  assert.equal(held.exercises[0].suggestion.status, "repeat", "a missed target is not advanced");
+  assert.equal(held.exercises[0].suggestion.suggestedWeightLb, 100, "it repeats the same weight");
+
+  // set_routine_target changes only what it is given.
+  const updated = await callTool<{
+    targetWeightLb: number;
+    targetSets: number;
+    targetReps: number;
+  }>("set_routine_target", {
+    routine: TEST_ROUTINE,
+    day: "testpush",
+    exercise: ROUTINE_TEST_LIFT,
+    target_weight_lb: 110,
+  });
+  assert.equal(updated.targetWeightLb, 110, "the weight target moves");
+  assert.equal(updated.targetSets, 3, "sets are untouched");
+  assert.equal(updated.targetReps, 8, "reps are untouched");
+
+  const unknownDay = await rpc("tools/call", {
+    name: "get_routine",
+    arguments: { routine: TEST_ROUTINE, day: "nosuchday" },
+  });
+  assert.ok(
+    unknownDay.body.result?.isError,
+    "an unknown day is an error, not a silently empty plan",
   );
 });
 
