@@ -1,3 +1,4 @@
+import { formatDate } from "@/lib/time";
 import { TrendLine } from "@/components/charts/trend-line";
 import {
   computeOverloadStatus,
@@ -39,10 +40,6 @@ function summarizeSessions(sets: StrengthSetRow[]): SessionSummary[] {
       sets: rows,
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
-}
-
-function formatDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 export default async function StrengthPage() {

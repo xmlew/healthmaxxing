@@ -1,13 +1,7 @@
+import { formatDate } from "@/lib/time";
 import { getRoutinePlan, type PlannedExercise } from "@/lib/routines";
 import { isWorkingSet } from "@/lib/set-types";
 import { displayLb } from "@/lib/units";
-
-function formatDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
 
 function formatTarget(exercise: PlannedExercise) {
   const weight =

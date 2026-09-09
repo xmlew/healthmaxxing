@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/time";
+
 import {
   Bar,
   CartesianGrid,
@@ -23,10 +25,6 @@ export type RecoveryChartPoint = {
 const HR_COLOR = "var(--color-accent)";
 const HRV_COLOR = "var(--color-chart-in)";
 const LOAD_COLOR = "var(--color-chart-out)";
-
-function formatDate(value: string) {
-  return new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
 
 type PlotPoint = RecoveryChartPoint & { load: number };
 
@@ -99,7 +97,7 @@ export function RecoveryChart({
           <CartesianGrid vertical={false} stroke="var(--color-border)" />
           <XAxis
             dataKey="date"
-            tickFormatter={formatDate}
+            tickFormatter={(value) => formatDate(value)}
             tick={{ fill: "var(--color-muted)", fontSize: 11 }}
             axisLine={{ stroke: "var(--color-border)" }}
             tickLine={false}

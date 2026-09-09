@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/time";
+
 import {
   Area,
   AreaChart,
@@ -13,10 +15,6 @@ import {
 } from "recharts";
 
 type Point = { date: string; value: number };
-
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
 
 function CustomTooltip({
   active,
@@ -73,7 +71,7 @@ export function TrendLine({
         <CartesianGrid vertical={false} stroke="var(--color-border)" strokeDasharray="0" />
         <XAxis
           dataKey="date"
-          tickFormatter={formatDate}
+          tickFormatter={(value) => formatDate(value)}
           tick={{ fill: "var(--color-muted)", fontSize: 11 }}
           axisLine={{ stroke: "var(--color-border)" }}
           tickLine={false}

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { StatTile } from "@/components/stat-tile";
 import { getWorkoutById } from "@/lib/queries";
-import { kjToKcal } from "@/lib/time";
+import { formatDate, kjToKcal } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +28,7 @@ export default async function WorkoutDetailPage({ params }: { params: Promise<{ 
         <h1 className="mt-2 font-display text-3xl tracking-tight md:text-4xl">{workout.name ?? "Workout"}</h1>
         <p className="mt-1 text-sm text-muted">
           {workout.start_time
-            ? new Date(workout.start_time).toLocaleString("en-US", {
+            ? formatDate(workout.start_time, {
                 weekday: "long",
                 month: "long",
                 day: "numeric",

@@ -1,3 +1,4 @@
+import { formatDate } from "@/lib/time";
 import { getRecentFoodLogs, getRecentWeightLogs } from "@/lib/queries";
 import { removeFoodLog, removeWeightLog } from "./actions";
 import { WeightForm } from "./weight-form";
@@ -6,7 +7,7 @@ import { FoodForm } from "./food-form";
 export const dynamic = "force-dynamic";
 
 function formatWhen(date: Date) {
-  return new Date(date).toLocaleString("en-US", {
+  return formatDate(date, {
     month: "short",
     day: "numeric",
     hour: "numeric",

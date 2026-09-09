@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { StatTile } from "@/components/stat-tile";
-import { kjToKcal } from "@/lib/time";
+import { formatDate, kjToKcal } from "@/lib/time";
 import { ANOMALY_BASELINE_DAYS, getAnomalies } from "@/lib/anomalies";
 import {
   getGoal,
@@ -51,7 +51,7 @@ export default async function DashboardPage() {
       ? Math.min(1, Math.max(0, (startWeight - weightKg) / (startWeight - targetWeight)))
       : null;
 
-  const today = new Date().toLocaleDateString("en-US", {
+  const today = formatDate(new Date(), {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -184,7 +184,7 @@ export default async function DashboardPage() {
           label="Sleep"
           value={sleep ? fmt(Number(sleep.qty), 1) : "--"}
           unit={sleep ? "hr" : undefined}
-          caption={sleep ? new Date(sleep.sample_ts).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : undefined}
+          caption={sleep ? formatDate(sleep.sample_ts) : undefined}
           delay={80}
         />
         <StatTile label="Resting HR" value={restingHr ? fmt(Number(restingHr.qty)) : "--"} unit={restingHr ? "bpm" : undefined} delay={120} />

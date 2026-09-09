@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getRecentWorkouts } from "@/lib/queries";
-import { kjToKcal } from "@/lib/time";
+import { formatDate, kjToKcal } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,7 @@ export default async function WorkoutsPage() {
                   <p className="font-medium">{w.name ?? "Workout"}</p>
                   <p className="text-xs text-muted">
                     {w.start_time
-                      ? new Date(w.start_time).toLocaleString("en-US", {
+                      ? formatDate(w.start_time, {
                           month: "short",
                           day: "numeric",
                           hour: "numeric",

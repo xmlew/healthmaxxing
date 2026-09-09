@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/time";
+
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type GroupVolume = { muscleGroup: string; weeks: { weekStart: string; volumeLb: number }[] };
@@ -14,10 +16,6 @@ const COLORS = [
   "var(--color-muted)",
 ];
 
-function formatWeek(value: string) {
-  return new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 function CustomTooltip({
   active,
   payload,
@@ -30,7 +28,7 @@ function CustomTooltip({
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-xl border border-border bg-surface-raised px-3 py-2 text-xs shadow-sm">
-      <p className="mb-1.5 text-muted">Week of {label ? formatWeek(label) : ""}</p>
+      <p className="mb-1.5 text-muted">Week of {label ? formatDate(label) : ""}</p>
       {payload
         .filter((p) => p.value > 0)
         .map((p) => (
@@ -73,7 +71,7 @@ export function MuscleGroupVolumeChart({ data }: { data: GroupVolume[] }) {
           <CartesianGrid vertical={false} stroke="var(--color-border)" />
           <XAxis
             dataKey="weekStart"
-            tickFormatter={formatWeek}
+            tickFormatter={(value) => formatDate(value)}
             tick={{ fill: "var(--color-muted)", fontSize: 11 }}
             axisLine={{ stroke: "var(--color-border)" }}
             tickLine={false}

@@ -1,3 +1,4 @@
+import { formatDate } from "@/lib/time";
 import Link from "next/link";
 import { TdeeChart } from "@/components/charts/tdee-chart";
 import { StatTile } from "@/components/stat-tile";
@@ -142,7 +143,7 @@ export default async function TdeePage({
               <p className="mt-0.5 text-xs text-muted">
                 Apple Health did not record resting burn on{" "}
                 {a.missingBasalDays
-                  .map((d) => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" }))
+                  .map((d) => formatDate(d))
                   .join(", ")}
                 . These days are excluded from the TDEE average so it is not understated.
               </p>

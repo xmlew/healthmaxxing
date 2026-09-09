@@ -1,12 +1,10 @@
 "use client";
 
+import { formatDate } from "@/lib/time";
+
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Point = { date: string; in: number; out: number };
-
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
 
 function CustomTooltip({
   active,
@@ -53,7 +51,7 @@ export function DualTrendLine({ data }: { data: Point[] }) {
           <CartesianGrid vertical={false} stroke="var(--color-border)" />
           <XAxis
             dataKey="date"
-            tickFormatter={formatDate}
+            tickFormatter={(value) => formatDate(value)}
             tick={{ fill: "var(--color-muted)", fontSize: 11 }}
             axisLine={{ stroke: "var(--color-border)" }}
             tickLine={false}

@@ -26,3 +26,14 @@ export function shiftDayKey(dayKey: string, deltaDays: number): string {
   shifted.setUTCDate(shifted.getUTCDate() + deltaDays);
   return shifted.toISOString().slice(0, 10);
 }
+
+export function formatDate(
+  value: Date | string,
+  options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" },
+): string {
+  const isCalendarDate = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  return new Intl.DateTimeFormat("en-US", {
+    ...options,
+    timeZone: isCalendarDate ? "UTC" : TIME_ZONE,
+  }).format(new Date(value));
+}
