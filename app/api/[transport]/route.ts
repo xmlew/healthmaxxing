@@ -2,6 +2,7 @@ import { createMcpHandler, getPublicOrigin, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { timingSafeEqualStr, verifyOAuthAccessToken } from "@/lib/oauth";
 import { z } from "zod";
+import { sql } from "@/lib/db";
 import {
   addFoodLog,
   addWeightLog,
@@ -81,15 +82,23 @@ function fail(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true as const };
 }
 
-// date omitted -> now; an unparseable string is a hard error rather than a
-// silent fallback to "now", which would log data against the wrong day.
-function resolveLoggedAt(date?: string): { iso: string } | { error: string } {
+const loggedDateSchema = z.union([
+  z.string().date(),
+  z.string().datetime({ offset: true, local: true }),
+]);
+
+async function resolveLoggedAt(date?: string): Promise<{ iso: string } | { error: string }> {
   if (date === undefined) return { iso: new Date().toISOString() };
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) {
-    return { error: `Invalid date: "${date}". Provide an ISO date or datetime string.` };
+  if (!loggedDateSchema.safeParse(date).success) {
+    return { error: `Invalid date: "${date}". Provide YYYY-MM-DD or an ISO datetime.` };
   }
-  return { iso: d.toISOString() };
+  if (/Z$|[+-]\d{2}:?\d{2}$/.test(date)) {
+    return { iso: new Date(date).toISOString() };
+  }
+  const [row] = await sql`
+    select ${date}::timestamp at time zone ${TIME_ZONE} as logged_at
+  `;
+  return { iso: row.logged_at.toISOString() };
 }
 
 const TREND_METRICS = {
@@ -361,7 +370,7 @@ const handler = createMcpHandler(
           "Record a manual weight / body-composition entry. `kg` required; `body_fat_pct`, `skeletal_muscle_mass_kg`, and `waist_cm` are optional (a smart-scale reading logs them together). `date` (ISO string) defaults to now. Re-logging the same timestamp updates that entry.",
         inputSchema: {
           kg: z.number().finite().positive().max(500),
-          date: z.string().optional(),
+          date: z.string().describe("Defaults to now. YYYY-MM-DD means midnight in America/Los_Angeles; datetimes without an offset also use America/Los_Angeles. Include Z or an offset for an exact instant.").optional(),
           body_fat_pct: z.number().finite().nonnegative().max(100).optional(),
           skeletal_muscle_mass_kg: z.number().finite().nonnegative().max(500).optional(),
           waist_cm: z.number().finite().positive().max(500).optional(),
@@ -369,7 +378,7 @@ const handler = createMcpHandler(
         },
       },
       async ({ kg, date, body_fat_pct, skeletal_muscle_mass_kg, waist_cm, note }) => {
-        const at = resolveLoggedAt(date);
+        const at = await resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         await addWeightLog({
           loggedAt: at.iso,
@@ -400,7 +409,7 @@ const handler = createMcpHandler(
         inputSchema: {
           description: z.string().min(1),
           calories: z.number().finite().nonnegative(),
-          date: z.string().optional(),
+          date: z.string().describe("Defaults to now. YYYY-MM-DD means midnight in America/Los_Angeles; datetimes without an offset also use America/Los_Angeles. Include Z or an offset for an exact instant.").optional(),
           protein_g: z.number().finite().nonnegative().optional(),
           carbs_g: z.number().finite().nonnegative().optional(),
           fat_g: z.number().finite().nonnegative().optional(),
@@ -408,7 +417,7 @@ const handler = createMcpHandler(
         },
       },
       async ({ description, calories, date, protein_g, carbs_g, fat_g, meal }) => {
-        const at = resolveLoggedAt(date);
+        const at = await resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         await addFoodLog({
           loggedAt: at.iso,
@@ -584,11 +593,11 @@ const handler = createMcpHandler(
           rir: z.number().finite().min(0).max(10).optional(),
           muscle_group: z.string().optional(),
           set_number: z.number().int().positive().optional(),
-          date: z.string().optional(),
+          date: z.string().describe("Defaults to now. YYYY-MM-DD means midnight in America/Los_Angeles; datetimes without an offset also use America/Los_Angeles. Include Z or an offset for an exact instant.").optional(),
         },
       },
       async ({ exercise, reps, weight_lb, type, rpe, rir, muscle_group, set_number, date }) => {
-        const at = resolveLoggedAt(date);
+        const at = await resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         const sessionDate = dayKeyInZone(new Date(at.iso));
         const exerciseId = await upsertExercise({ name: exercise.trim(), muscleGroup: muscle_group ?? null });
@@ -747,11 +756,11 @@ const handler = createMcpHandler(
           day: z.string().optional(),
           routine: z.string().optional(),
           notes: z.string().optional(),
-          date: z.string().optional(),
+          date: z.string().describe("Defaults to now. YYYY-MM-DD means midnight in America/Los_Angeles; datetimes without an offset also use America/Los_Angeles. Include Z or an offset for an exact instant.").optional(),
         },
       },
       async ({ exercises, day, routine, notes, date }) => {
-        const at = resolveLoggedAt(date);
+        const at = await resolveLoggedAt(date);
         if ("error" in at) return fail(at.error);
         const sessionDate = dayKeyInZone(new Date(at.iso));
 

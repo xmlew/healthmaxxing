@@ -20,6 +20,7 @@ const TEST_EXERCISES = [
   WORKOUT_TEST_EXERCISE,
   WORKOUT_TEST_ACCESSORY,
   ROUTINE_TEST_LIFT,
+  "__mcp_calendar_lift__",
 ];
 // Built and torn down by the routine test. Never the real routine: these tools
 // write, and the dev DB holds the actual training plan.
@@ -519,4 +520,79 @@ test("get_anomalies returns every evaluated signal with a status", async () => {
 test("unauthenticated requests are rejected with 401", async () => {
   const { status } = await rpc("tools/list", {}, { auth: false });
   assert.equal(status, 401);
+});
+
+test("MCP calendar dates stay on the requested Los Angeles day", async () => {
+  const cases = [
+    ["2026-01-15", "2026-01-15T08:00:00.000Z"],
+    ["2026-07-15", "2026-07-15T07:00:00.000Z"],
+    ["2026-03-08", "2026-03-08T08:00:00.000Z"],
+    ["2026-11-01", "2026-11-01T07:00:00.000Z"],
+    ["2026-07-15T23:30:00", "2026-07-16T06:30:00.000Z"],
+    ["2026-07-15T23:30:00-07:00", "2026-07-16T06:30:00.000Z"],
+  ];
+  try {
+    for (const [date, expected] of cases) {
+      for (const name of ["log_food", "log_weight"]) {
+        const args = name === "log_food"
+          ? { description: "__mcp_calendar_test__", calories: 123, date }
+          : { kg: 70, note: "__mcp_calendar_test__", date };
+        if (name === "log_weight") {
+          await withSql(async (sql) => {
+            const existing = await sql`select id from weight_logs where logged_at = ${expected}::timestamptz and source = 'manual' and note is distinct from '__mcp_calendar_test__'`;
+            assert.equal(existing.length, 0, "refuse to overwrite an existing weigh-in");
+          });
+        }
+        const logged = await callTool<{ loggedAt: string }>(name, args);
+        assert.equal(logged.loggedAt, expected, `${name} resolves ${date}`);
+        await withSql(async (sql) => {
+          const rows = name === "log_food"
+            ? await sql`select logged_at from food_logs where description = '__mcp_calendar_test__' order by id desc limit 1`
+            : await sql`select logged_at from weight_logs where note = '__mcp_calendar_test__' and logged_at = ${expected}::timestamptz`;
+          assert.equal(rows[0].logged_at.toISOString(), expected);
+        });
+      }
+    }
+  } finally {
+    await withSql(async (sql) => {
+      await sql`delete from food_logs where description = '__mcp_calendar_test__'`;
+      await sql`delete from weight_logs where note = '__mcp_calendar_test__'`;
+    });
+  }
+});
+
+test("MCP rejects invalid calendar dates without writing", async () => {
+  for (const date of ["2026-02-30", "2026-13-01", "not-a-date"]) {
+    const { body } = await rpc("tools/call", {
+      name: "log_food", arguments: { description: "__mcp_invalid_date_test__", calories: 1, date },
+    });
+    try {
+      assert.equal(body.result?.isError, true, date);
+      await withSql(async (sql) => {
+        const rows = await sql`select id from food_logs where description = '__mcp_invalid_date_test__'`;
+        assert.equal(rows.length, 0);
+      });
+    } finally {
+      await withSql(async (sql) => {
+        await sql`delete from food_logs where description = '__mcp_invalid_date_test__'`;
+      });
+    }
+  }
+});
+
+
+test("date-only strength logging keeps sets and workouts on the requested day", async () => {
+  const date = "2026-07-15";
+  for (const name of ["log_set", "log_workout"]) {
+    const args = name === "log_set"
+      ? { date, exercise: "__mcp_calendar_lift__", reps: 5, weight_lb: 100 }
+      : { date, exercises: [{ name: "__mcp_calendar_lift__", sets: [{ reps: 5, weight_lb: 100 }] }] };
+    const logged = await callTool<{ sessionDate: string; sessionId: number }>(name, args);
+    workoutTestSessionIds.push(logged.sessionId);
+    assert.equal(logged.sessionDate, date, name);
+    await withSql(async (sql) => {
+      const [session] = await sql`select session_date::text as day from strength_sessions where id = ${logged.sessionId}`;
+      assert.equal(session.day, date);
+    });
+  }
 });

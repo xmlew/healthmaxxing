@@ -140,6 +140,10 @@ Tools: `get_today_summary`, `get_trends`, `get_goal_status`, `list_workouts`,
 (with macros), `log_workout`, `log_set`, `set_routine_target`, `set_goal`,
 `delete_weight_log`, `delete_food_log`, `delete_set` (write).
 
+For logging tools, omitted `date` means now. A `YYYY-MM-DD` value means midnight
+on that calendar day in `America/Los_Angeles`; an ISO datetime without an offset
+also uses that zone. Include `Z` or a numeric offset to specify an exact instant.
+
 `log_workout` records an entire session in one call - a five-exercise push day
 is one round trip instead of fifteen - and writes every set in a single insert,
 so a failure cannot leave half a session behind. `get_routine` answers the other
