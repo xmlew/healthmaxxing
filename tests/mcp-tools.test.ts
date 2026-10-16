@@ -1,6 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { mcpClient } from "./support/mcp";
+import { startTestServer, type TestServer } from "./support/server";
 import { selectTestDatabase } from "./support/test-db";
 import postgres from "postgres";
 
@@ -42,81 +43,17 @@ async function withSql<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
   }
 }
 
-let server: ChildProcess;
-
-async function waitForServer(timeoutMs = 60_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${BASE}/`, { method: "GET" });
-      if (res.ok) return;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(`Server did not start on ${BASE} within ${timeoutMs}ms`);
-}
-
-type RpcFrame = {
-  result?: {
-    tools?: { name: string }[];
-    content?: { text?: string }[];
-    isError?: boolean;
-  };
-  error?: { message?: string } | null;
-};
-
-// mcp-handler replies as SSE: one `data: <json>` line carrying the JSON-RPC frame.
-function parseSse(text: string): RpcFrame {
-  const line = text.split("\n").find((l) => l.startsWith("data:"));
-  if (!line) throw new Error(`No SSE data line in response: ${text.slice(0, 200)}`);
-  return JSON.parse(line.slice("data:".length).trim()) as RpcFrame;
-}
-
-async function rpc(
-  method: string,
-  params: unknown,
-  { auth = true }: { auth?: boolean } = {},
-): Promise<{ status: number; body: RpcFrame }> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  if (auth) headers.Authorization = `Bearer ${SECRET}`;
-  const res = await fetch(`${BASE}/api/mcp`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
-  const raw = await res.text();
-  return { status: res.status, body: res.ok ? parseSse(raw) : { error: { message: raw } } };
-}
-
-// Unwrap a tools/call result whose payload is JSON serialized inside content[0].text.
-// The payload shape varies per tool, so each caller passes the shape it asserts on.
-async function callTool<T = Record<string, unknown>>(
-  name: string,
-  args: Record<string, unknown> = {},
-): Promise<T> {
-  const { body } = await rpc("tools/call", { name, arguments: args });
-  const text = body.result?.content?.[0]?.text;
-  assert.ok(text, `tool ${name} returned no content text: ${JSON.stringify(body)}`);
-  return JSON.parse(text) as T;
-}
+let server: TestServer | undefined;
+const { rpc, callTool } = mcpClient(BASE, SECRET);
 
 before(async () => {
   assert.ok(SECRET, "MCP_SECRET must be set in .env.local for the test");
   await removeSentinels();
-  server = spawn("npx", ["next", "start", "-p", String(PORT)], {
-    stdio: "ignore",
-    env: process.env,
-  });
-  await waitForServer();
+  server = await startTestServer(PORT);
 });
 
 after(() => {
-  server?.kill("SIGTERM");
+  server?.stop();
 });
 
 // Remove every sentinel row these tests write, by exact match, so the shared dev
