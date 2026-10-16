@@ -115,6 +115,14 @@ export async function findRace(today: string, name?: string): Promise<Race | nul
   return row ? toRace(row) : null;
 }
 
+// The race a write applies to: the named one, or else the next upcoming race.
+// Unlike findRace there is no fallback to a finished race - editing last
+// season's plan when the athlete meant the next race would be a silent mistake.
+export async function findRaceToEdit(today: string, name?: string): Promise<Race | null> {
+  const race = await findRace(today, name);
+  return race && (name || race.raceDate >= today) ? race : null;
+}
+
 export async function listRaces(): Promise<Race[]> {
   const rows = await sql`select ${RACE_COLUMNS} from races order by race_date`;
   return rows.map(toRace);

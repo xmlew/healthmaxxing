@@ -109,6 +109,7 @@ import {
   applyChecklist,
   CHECKLIST_TEMPLATES,
   findRace,
+  findRaceToEdit,
   getRaceFuelPlan,
   listRaceGear,
   listRaces,
@@ -1997,8 +1998,8 @@ const handler = createMcpHandler(
       },
       async ({ label, race: raceName, equipment, ready, notes }) => {
         const today = dayKeyInZone(new Date());
-        const race = await findRace(today, raceName);
-        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const race = await findRaceToEdit(today, raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No upcoming race; name one, or add it with set_race.");
         let equipmentId: number | null | undefined = equipment === null ? null : undefined;
         if (equipment) {
           const id = await findEquipmentId(equipment);
@@ -2032,8 +2033,8 @@ const handler = createMcpHandler(
         inputSchema: { label: z.string().min(1), race: z.string().min(1).optional() },
       },
       async ({ label, race: raceName }) => {
-        const race = await findRace(dayKeyInZone(new Date()), raceName);
-        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const race = await findRaceToEdit(dayKeyInZone(new Date()), raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No upcoming race; name one, or add it with set_race.");
         const removed = await removeRaceGear(race.id, label.trim());
         return removed ? ok({ ok: true, race: race.name, removed: label }) : fail(`No "${label}" on ${race.name}.`);
       }
@@ -2063,8 +2064,8 @@ const handler = createMcpHandler(
       },
       async ({ title, race: raceName, category, due_on, done, done_on, confirmation, expense_id, notes }) => {
         const today = dayKeyInZone(new Date());
-        const race = await findRace(today, raceName);
-        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const race = await findRaceToEdit(today, raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No upcoming race; name one, or add it with set_race.");
         if (done === false && done_on) return fail("done_on cannot be given with done: false.");
         const refused = await setRaceTask(race.id, title.trim(), {
           category,
@@ -2090,8 +2091,8 @@ const handler = createMcpHandler(
         inputSchema: { title: z.string().min(1), race: z.string().min(1).optional() },
       },
       async ({ title, race: raceName }) => {
-        const race = await findRace(dayKeyInZone(new Date()), raceName);
-        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const race = await findRaceToEdit(dayKeyInZone(new Date()), raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No upcoming race; name one, or add it with set_race.");
         const removed = await removeRaceTask(race.id, title.trim());
         return removed ? ok({ ok: true, race: race.name, removed: title }) : fail(`No "${title}" on ${race.name}.`);
       }
@@ -2110,8 +2111,8 @@ const handler = createMcpHandler(
         },
       },
       async ({ product, servings, race: raceName }) => {
-        const race = await findRace(dayKeyInZone(new Date()), raceName);
-        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const race = await findRaceToEdit(dayKeyInZone(new Date()), raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No upcoming race; name one, or add it with set_race.");
         const found = await findConsumableIds([product]);
         if ("error" in found) return fail(found.error);
         await setRaceFuel(race.id, [...found.ids.values()][0], servings);

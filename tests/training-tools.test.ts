@@ -566,6 +566,9 @@ test("totals are exact to the cent", async () => {
 
 test("a race reports days to go, recent milestones, and its own budget", async () => {
   const today = dayKeyInZone(new Date());
+  await callTool("set_race", { name: `${TAG}last season`, race_date: shiftDayKey(today, -300), format: "70.3" });
+  const noUpcoming = await callToolError("set_race_task", { title: "Register" });
+  assert.match(noUpcoming, /upcoming/, "writes never fall back to a finished race");
   const race = `${TAG}santa cruz`;
   const created = await callTool<{ race: { swimKm: number; bikeKm: number; runKm: number } }>("set_race", {
     name: race,
@@ -580,7 +583,6 @@ test("a race reports days to go, recent milestones, and its own budget", async (
     "nominal 1.2 / 56 / 13.1 mi",
   );
   await callTool("set_race", { name: `${TAG}tune-up`, race_date: shiftDayKey(today, 160), format: "70.3" });
-  await callTool("set_race", { name: `${TAG}last season`, race_date: shiftDayKey(today, -300), format: "70.3" });
 
   const log = (daysAgo: number, segments: unknown[]) =>
     callTool("log_training_session", { date: shiftDayKey(today, -daysAgo), segments, notes: TAG });
