@@ -64,6 +64,7 @@ import {
   setConsumable,
   type Consumable,
 } from "@/lib/fuel";
+import { getAttention, setDismissal } from "@/lib/attention";
 import {
   BASE_CURRENCY,
   createExpense,
@@ -2087,6 +2088,39 @@ const handler = createMcpHandler(
         if ("error" in found) return fail(found.error);
         await setRaceFuel(race.id, [...found.ids.values()][0], servings);
         return ok({ ok: true, race: race.name, fuelPlan: await getRaceFuelPlan(race.id) });
+      }
+    );
+
+    server.registerTool(
+      "get_needs_attention",
+      {
+        title: "Needs attention",
+        description:
+          "One prioritized list of what needs doing before the next workout or race, across every area: race gear missing or (within 8 weeks) never tested, overdue or due-soon race deadlines, maintenance due or approaching, fuel short of planned and race need, expired, low, or below zero, a race over budget, expenses with no USD rate, and planned sessions left in the past. Each item has a severity (blocker, warning, info), the reason with the figures it rests on, the next action, and a `key` for dismiss_attention. Dismissed and snoozed items are hidden (`hidden` counts them) unless include_dismissed is true. Use this first when asked what to focus on.",
+        inputSchema: { include_dismissed: z.boolean().default(false) },
+      },
+      async ({ include_dismissed }) =>
+        ok(await getAttention(dayKeyInZone(new Date()), { includeDismissed: include_dismissed })),
+    );
+
+    server.registerTool(
+      "dismiss_attention",
+      {
+        title: "Dismiss or snooze an attention item",
+        description:
+          "Hide a needs-attention item by its `key`: until it changes (no date), or snoozed until `snooze_until` (YYYY-MM-DD). Keys carry the item's state, so a dismissed warning comes back if it gets worse or a new cycle starts. `undo: true` shows it again. Dismissing hides the reminder; it does not resolve the underlying issue.",
+        inputSchema: {
+          key: z.string().min(1),
+          snooze_until: z.string().date().optional(),
+          undo: z.boolean().default(false),
+        },
+      },
+      async ({ key, snooze_until, undo }) => {
+        if (undo && snooze_until) return fail("Give snooze_until or undo, not both.");
+        const today = dayKeyInZone(new Date());
+        if (snooze_until && snooze_until <= today) return fail("snooze_until must be after today.");
+        await setDismissal(key, undo ? "undo" : { until: snooze_until ?? null });
+        return ok({ ok: true, key, ...(undo ? { restored: true } : { until: snooze_until ?? "dismissed" }) });
       }
     );
   },

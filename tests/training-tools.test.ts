@@ -63,6 +63,8 @@ async function removeTestRows(): Promise<void> {
     await sql`delete from races where name like ${`${TAG}%`}`;
     await sql`delete from equipment where name like ${`${TAG}%`}`;
     await sql`delete from workouts where id like ${`${TAG}%`}`;
+    // Keys embed row ids, not names; the test database is this suite's own.
+    await sql`delete from attention_dismissals`;
   } finally {
     await sql.end();
   }
@@ -759,4 +761,86 @@ test("a race fueling plan totals its nutrition and counts toward the stock short
 
   await callTool("set_race_fuel", { race, product: chews, servings: 0 });
   assert.equal((await stockOf(chews)).shortfall, 0, "removing it from the plan removes the need");
+});
+
+type Attention = {
+  items: {
+    key: string;
+    severity: string;
+    area: string;
+    reason: string;
+    nextAction: string;
+    dismissed?: { until: string | null };
+  }[];
+  hidden: number;
+};
+
+test("the needs-attention feed surfaces blockers once, with reasons, and honours dismiss and snooze", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}close race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(today, 20) });
+  const goggles = `${TAG}goggles`;
+  const trainer = `${TAG}trainer bike`;
+  await callTool("set_equipment", { name: goggles, category: "goggles" });
+  await callTool("set_equipment", { name: trainer, category: "bike" });
+  await callTool("set_race_gear", { race, label: "goggles", equipment: goggles });
+  await callTool("set_race_gear", { race, label: "bike" });
+  await callTool("set_maintenance_rule", { equipment: trainer, name: "tyre check", every_km: 50, starts_on: "2020-07-01" });
+  const ride = await callTool<LoggedSession>("log_training_session", {
+    date: "2020-07-02",
+    segments: [{ sport: "bike", duration_min: 90, distance_km: 46, equipment: [trainer] }],
+    notes: TAG,
+  });
+  const stale = await callTool<LoggedSession>("log_training_session", {
+    date: "2020-07-03",
+    status: "planned",
+    segments: [{ sport: "run", distance_km: 10 }],
+    notes: TAG,
+  });
+
+  const feed = () => callTool<Attention>("get_needs_attention");
+  const mine = (a: Attention, text: string) => a.items.filter((i) => i.reason.includes(text));
+
+  let attention = await feed();
+  const [missingBike] = mine(attention, `${race} (20 days): bike is missing`);
+  assert.equal(missingBike.severity, "blocker", "missing gear 20 days out blocks");
+  assert.match(missingBike.nextAction, /set_race_gear/);
+  const [untested] = mine(attention, `goggles (${goggles}) has never been used`);
+  assert.equal(untested.severity, "warning");
+  const tyre = mine(attention, `${trainer}: tyre check`);
+  assert.equal(tyre.length, 1, "one item per rule");
+  assert.match(tyre[0].reason, /is approaching \(46 km of every 50 km since 2020-07-01\)/);
+  assert.equal(mine(attention, `Session ${stale.session.id} planned for 2020-07-03`).length, 1);
+  assert.equal(
+    attention.items.findIndex((i) => i.severity !== "blocker") >
+      attention.items.findLastIndex((i) => i.severity === "blocker"),
+    true,
+    "blockers come first",
+  );
+
+  await callTool("dismiss_attention", { key: tyre[0].key });
+  attention = await feed();
+  assert.equal(mine(attention, `${trainer}: tyre check`).length, 0, "dismissed items are hidden");
+  assert.ok(attention.hidden >= 1);
+
+  await callTool("update_training_session", {
+    id: ride.session.id,
+    segments: [{ sport: "bike", duration_min: 100, distance_km: 52, equipment: [trainer] }],
+  });
+  const due = mine(await feed(), `${trainer}: tyre check`);
+  assert.equal(due.length, 1, "getting worse brings a dismissed item back");
+  assert.match(due[0].reason, /is due/);
+
+  await callTool("dismiss_attention", { key: missingBike.key, snooze_until: shiftDayKey(today, 3) });
+  assert.equal(mine(await feed(), `${race} (20 days): bike is missing`).length, 0, "snoozed");
+  const withDismissed = await callTool<Attention>("get_needs_attention", { include_dismissed: true });
+  assert.equal(
+    withDismissed.items.find((i) => i.key === missingBike.key)?.dismissed?.until,
+    shiftDayKey(today, 3),
+  );
+  await callTool("dismiss_attention", { key: missingBike.key, undo: true });
+  assert.equal(mine(await feed(), `${race} (20 days): bike is missing`).length, 1, "undo shows it again");
+
+  await callTool("log_service", { equipment: trainer, rule: "tyre check", date: "2020-07-04" });
+  assert.equal(mine(await feed(), `${trainer}: tyre check`).length, 0, "the service resolves it");
 });

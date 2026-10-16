@@ -521,6 +521,16 @@ create table if not exists race_fuel (
   constraint race_fuel_servings_check check (servings > 0)
 );
 
+-- The "needs attention" feed is computed, so only the athlete's choice to hide
+-- an item is stored: dismissed (until is null) or snoozed until a date. Keys
+-- carry the item's state, so a dismissed "approaching" does not hide a later
+-- "due", and a new maintenance cycle starts fresh.
+create table if not exists attention_dismissals (
+  key text primary key,
+  until date,
+  created_at timestamptz not null default now()
+);
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,
