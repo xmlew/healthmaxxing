@@ -35,7 +35,7 @@ type Session = {
   totalDurationMin: number | null;
   segments: Segment[];
 };
-type Stock = { name: string; onHand: number; plannedNeed: number; shortfall: number };
+type Stock = { name: string; onHand: number; plannedNeed: number; raceNeed: number; shortfall: number };
 type LoggedSession = {
   session: Session & { carbsPerHour: number | null };
   equipment: { name: string; usage: Usage }[];
@@ -52,6 +52,10 @@ async function removeTestRows(): Promise<void> {
     `;
     await sql`
       delete from stock_events
+      where consumable_id in (select id from consumables where name like ${`${TAG}%`})
+    `;
+    await sql`
+      delete from race_fuel
       where consumable_id in (select id from consumables where name like ${`${TAG}%`})
     `;
     await sql`delete from consumables where name like ${`${TAG}%`}`;
@@ -721,4 +725,38 @@ test("race deadlines flag overdue and due-soon bookings, and a booking's cost jo
     expense_id: expense.id,
   });
   assert.match(refused, /another race/);
+});
+
+test("a race fueling plan totals its nutrition and counts toward the stock shortfall", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}fuel race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(today, 500) });
+  const gel = `${TAG}race gel`;
+  const chews = `${TAG}chews`;
+  await callTool("set_consumable", { name: gel, kind: "gel", carbs_g: 25, sodium_mg: 50, caffeine_mg: 0 });
+  await callTool("set_consumable", { name: chews, kind: "chew", carbs_g: 24 });
+  await callTool("adjust_stock", { product: gel, servings: 4 });
+
+  await callTool("set_race_fuel", { race, product: gel, servings: 6 });
+  const plan = await callTool<{
+    fuelPlan: { totalCarbsG: number | null; totalSodiumMg: number | null };
+  }>("set_race_fuel", { race, product: chews, servings: 2 });
+  assert.equal(plan.fuelPlan.totalCarbsG, 198, "6 x 25 + 2 x 24");
+  assert.equal(plan.fuelPlan.totalSodiumMg, null, "chews have no sodium figure, so no total is claimed");
+
+  const gelStock = await stockOf(gel);
+  assert.equal(gelStock.raceNeed, 6);
+  assert.equal(gelStock.shortfall, 2, "6 planned for the race, 4 on hand");
+
+  const status = await callTool<{ fuelPlan: { stock: { product: string; shortfall: number }[] } }>(
+    "get_race_status",
+    { race },
+  );
+  assert.deepEqual(
+    status.fuelPlan.stock.map((s) => [s.product, s.shortfall]).sort(),
+    [[chews, 2], [gel, 2]],
+  );
+
+  await callTool("set_race_fuel", { race, product: chews, servings: 0 });
+  assert.equal((await stockOf(chews)).shortfall, 0, "removing it from the plan removes the need");
 });

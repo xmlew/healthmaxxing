@@ -106,11 +106,13 @@ import {
 } from "@/lib/equipment";
 import {
   findRace,
+  getRaceFuelPlan,
   listRaceGear,
   listRaces,
   listRaceTasks,
   removeRaceGear,
   removeRaceTask,
+  setRaceFuel,
   setRaceGear,
   setRaceTask,
   raceBudget,
@@ -269,6 +271,7 @@ function presentConsumable(item: Consumable) {
     ...item,
     onHand: round1Servings(item.onHand),
     plannedNeed: round1Servings(item.plannedNeed),
+    raceNeed: round1Servings(item.raceNeed),
     shortfall: round1Servings(item.shortfall),
   };
 }
@@ -1552,7 +1555,7 @@ const handler = createMcpHandler(
       {
         title: "List fuel stock",
         description:
-          "Every consumable with its nutrition per serving and its stock: `onHand` (adjustments minus servings on completed sessions), `plannedNeed` (servings on planned sessions from today on, not yet deducted), `shortfall` (need beyond what is on hand), and `lowStock` (at or below its low_stock_servings). `expiry` counts servings already expired and expiring within 30 days, assuming the earliest-expiring servings were used first - lot-level use is not recorded. A negative onHand means more was logged as used than was ever stocked: a starting count is missing.",
+          "Every consumable with its nutrition per serving and its stock: `onHand` (adjustments minus servings on completed sessions), `plannedNeed` (servings on planned sessions from today on, not yet deducted), `raceNeed` (servings in the fueling plans of upcoming races), `shortfall` (both needs beyond what is on hand), and `lowStock` (at or below its low_stock_servings). `expiry` counts servings already expired and expiring within 30 days, assuming the earliest-expiring servings were used first - lot-level use is not recorded. A negative onHand means more was logged as used than was ever stocked: a starting count is missing.",
       },
       async () => {
         const items = await listConsumables(dayKeyInZone(new Date()));
@@ -1902,7 +1905,7 @@ const handler = createMcpHandler(
       {
         title: "Race status",
         description:
-          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, the gear checklist with each requirement's state (missing / acquired / tested / ready) and the evidence it rests on, deadlines and bookings with their state (overdue / due_soon within 14 days / open / done), and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
+          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, the gear checklist with each requirement's state (missing / acquired / tested / ready) and the evidence it rests on, deadlines and bookings with their state (overdue / due_soon within 14 days / open / done), the race-day fueling plan with its carb/sodium/caffeine totals and any stock shortfall, and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
         inputSchema: { race: z.string().min(1).optional() },
       },
       async ({ race: name }) => {
@@ -1913,13 +1916,16 @@ const handler = createMcpHandler(
             ? fail(`No race named "${name}".`)
             : ok({ race: null, message: "No race set yet. Add one with set_race." });
         }
-        const [milestones, budget, races, gear, tasks] = await Promise.all([
+        const [milestones, budget, races, gear, tasks, fuelPlan] = await Promise.all([
           sportMilestones(race, today),
           raceBudget(race),
           listRaces(),
           listRaceGear(race.id),
           listRaceTasks(race.id, today),
+          getRaceFuelPlan(race.id),
         ]);
+        const planned = new Set(fuelPlan.lines.map((l) => l.product.toLowerCase()));
+        const stock = (await listConsumables(today)).filter((c) => planned.has(c.name.toLowerCase()));
         return ok({
           race: presentRace(race),
           daysToGo: daysBetween(today, race.raceDate),
@@ -1932,6 +1938,14 @@ const handler = createMcpHandler(
           })),
           gear,
           tasks,
+          fuelPlan: {
+            ...fuelPlan,
+            stock: stock.map((c) => ({
+              product: c.name,
+              onHand: round1Servings(c.onHand),
+              shortfall: round1Servings(c.shortfall),
+            })),
+          },
           budget,
           races: races.map((r) => ({ name: r.name, raceDate: r.raceDate })),
         });
@@ -2051,6 +2065,28 @@ const handler = createMcpHandler(
         if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
         const removed = await removeRaceTask(race.id, title.trim());
         return removed ? ok({ ok: true, race: race.name, removed: title }) : fail(`No "${title}" on ${race.name}.`);
+      }
+    );
+
+    server.registerTool(
+      "set_race_fuel",
+      {
+        title: "Set the race-day fueling plan",
+        description:
+          "Set how many servings of a product (by name, from list_consumables) you plan to carry on race day; 0 removes it from the plan. The plan is yours - it is totalled (carbs, sodium, caffeine) and checked against stock together with planned sessions, never prescribed. Race defaults to the next upcoming one. Returns the whole plan.",
+        inputSchema: {
+          product: z.string().min(1),
+          servings: z.number().finite().nonnegative(),
+          race: z.string().min(1).optional(),
+        },
+      },
+      async ({ product, servings, race: raceName }) => {
+        const race = await findRace(dayKeyInZone(new Date()), raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const found = await findConsumableIds([product]);
+        if ("error" in found) return fail(found.error);
+        await setRaceFuel(race.id, [...found.ids.values()][0], servings);
+        return ok({ ok: true, race: race.name, fuelPlan: await getRaceFuelPlan(race.id) });
       }
     );
   },

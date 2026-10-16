@@ -510,6 +510,17 @@ create table if not exists race_tasks (
 
 create unique index if not exists race_tasks_race_title_key on race_tasks (race_id, lower(title));
 
+-- The race-day fueling plan: servings of each product to carry. The plan is the
+-- athlete's own; it is checked against stock (alongside planned sessions) and
+-- totalled, never prescribed.
+create table if not exists race_fuel (
+  race_id bigint not null references races (id) on delete cascade,
+  consumable_id bigint not null references consumables (id),
+  servings double precision not null,
+  primary key (race_id, consumable_id),
+  constraint race_fuel_servings_check check (servings > 0)
+);
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,

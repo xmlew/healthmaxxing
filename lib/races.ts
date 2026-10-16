@@ -416,3 +416,66 @@ export async function removeRaceTask(raceId: number, title: string): Promise<boo
   `;
   return rows.length > 0;
 }
+
+export type RaceFuelLine = {
+  product: string;
+  servings: number;
+  servingUnit: string;
+  carbsG: number | null;
+  sodiumMg: number | null;
+  caffeineMg: number | null;
+};
+
+export type RaceFuelPlan = {
+  lines: RaceFuelLine[];
+  // A total is reported only when every line has that figure; otherwise it
+  // would understate the plan.
+  totalCarbsG: number | null;
+  totalSodiumMg: number | null;
+  totalCaffeineMg: number | null;
+};
+
+export async function getRaceFuelPlan(raceId: number): Promise<RaceFuelPlan> {
+  const rows = await sql`
+    select c.name, rf.servings, c.serving_unit, c.carbs_g, c.sodium_mg, c.caffeine_mg
+    from race_fuel rf
+    join consumables c on c.id = rf.consumable_id
+    where rf.race_id = ${raceId}
+    order by c.name
+  `;
+  const perServing = (v: unknown, servings: number) => (v == null ? null : Number(v) * servings);
+  const lines = rows.map((r) => {
+    const servings = Number(r.servings);
+    return {
+      product: r.name as string,
+      servings,
+      servingUnit: r.serving_unit as string,
+      carbsG: perServing(r.carbs_g, servings),
+      sodiumMg: perServing(r.sodium_mg, servings),
+      caffeineMg: perServing(r.caffeine_mg, servings),
+    };
+  });
+  const total = (key: "carbsG" | "sodiumMg" | "caffeineMg") =>
+    lines.length > 0 && lines.every((l) => l[key] != null)
+      ? lines.reduce((sum, l) => sum + (l[key] as number), 0)
+      : null;
+  return {
+    lines,
+    totalCarbsG: total("carbsG"),
+    totalSodiumMg: total("sodiumMg"),
+    totalCaffeineMg: total("caffeineMg"),
+  };
+}
+
+// Servings 0 removes the product from the plan.
+export async function setRaceFuel(raceId: number, consumableId: number, servings: number): Promise<void> {
+  if (servings === 0) {
+    await sql`delete from race_fuel where race_id = ${raceId} and consumable_id = ${consumableId}`;
+    return;
+  }
+  await sql`
+    insert into race_fuel (race_id, consumable_id, servings)
+    values (${raceId}, ${consumableId}, ${servings})
+    on conflict (race_id, consumable_id) do update set servings = excluded.servings
+  `;
+}

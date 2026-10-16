@@ -24,6 +24,9 @@ export type Consumable = {
   onHand: number;
   // Servings on planned sessions from today on; never deducted until completed.
   plannedNeed: number;
+  // Servings in the fueling plans of races from today on.
+  raceNeed: number;
+  // Need from both beyond what is on hand.
   shortfall: number;
   lowStock: boolean;
   expiry: ExpiryStatus;
@@ -140,6 +143,12 @@ export async function listConsumables(
           and ts.session_date >= ${today}::date
       ), 0) as planned_need,
       coalesce((
+        select sum(rf.servings)
+        from race_fuel rf
+        join races r on r.id = rf.race_id
+        where rf.consumable_id = c.id and r.race_date >= ${today}::date
+      ), 0) as race_need,
+      coalesce((
         select json_agg(json_build_object(
           'servings', se.servings, 'expiresOn', to_char(se.expires_on, 'YYYY-MM-DD')
         ))
@@ -157,6 +166,7 @@ export async function listConsumables(
   return rows.map((r) => {
     const onHand = Number(r.stocked) - Number(r.consumed);
     const plannedNeed = Number(r.planned_need);
+    const raceNeed = Number(r.race_need);
     const lowStockServings = r.low_stock_servings == null ? null : Number(r.low_stock_servings);
     return {
       id: Number(r.id),
@@ -170,7 +180,8 @@ export async function listConsumables(
       notes: (r.notes as string | null) ?? null,
       onHand,
       plannedNeed,
-      shortfall: Math.max(0, plannedNeed - onHand),
+      raceNeed,
+      shortfall: Math.max(0, plannedNeed + raceNeed - onHand),
       lowStock: lowStockServings != null && onHand <= lowStockServings,
       expiry: expiryOf(
         (r.lots as { servings: number; expiresOn: string | null }[]).map((l) => ({
