@@ -57,7 +57,24 @@ import {
   upsertRoutineTarget,
   type RoutineDay,
 } from "@/lib/routines";
-import { dayKeyInZone, kjToKcal, TIME_ZONE } from "@/lib/time";
+import {
+  createTrainingSession,
+  getTrainingSession,
+  listTrainingSessions,
+  setTrainingSessionDeleted,
+  updateTrainingSession,
+  type TrainingSession,
+} from "@/lib/training";
+import type { SegmentInput } from "@/lib/training-segments";
+import { SESSION_STATUSES, SPORTS } from "@/lib/sports";
+import {
+  EQUIPMENT_STATUSES,
+  listEquipment,
+  resolveUsableEquipment,
+  setEquipment,
+  type Equipment,
+} from "@/lib/equipment";
+import { dayKeyInZone, kjToKcal, shiftDayKey, TIME_ZONE } from "@/lib/time";
 import { displayLb, displayVolumeLb, kgToLb, lbToKg } from "@/lib/units";
 
 const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]];
@@ -102,6 +119,85 @@ async function resolveLoggedAt(date?: string): Promise<{ iso: string } | { error
     select ${date}::text::timestamp at time zone ${TIME_ZONE} as logged_at
   `;
   return { iso: row.logged_at.toISOString() };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// Distances are stored in km; swims also read out in metres, the unit a swim
+// is actually counted in.
+function presentSession(session: TrainingSession) {
+  return {
+    ...session,
+    totalDistanceKm: session.totalDistanceKm != null ? round2(session.totalDistanceKm) : null,
+    segments: session.segments.map((seg) => ({
+      ...seg,
+      distanceKm: seg.distanceKm != null ? round2(seg.distanceKm) : null,
+      ...(seg.sport === "swim" && seg.distanceKm != null
+        ? { distanceM: Math.round(seg.distanceKm * 1000) }
+        : {}),
+    })),
+  };
+}
+
+function presentEquipment(item: Equipment) {
+  return {
+    ...item,
+    usage: {
+      ...item.usage,
+      distanceKm: round2(item.usage.distanceKm),
+      durationMin: Math.round(item.usage.durationMin),
+    },
+  };
+}
+
+const segmentSchema = z
+  .object({
+    sport: z.enum(SPORTS),
+    duration_min: z.number().finite().positive().optional(),
+    distance_km: z.number().finite().nonnegative().optional(),
+    distance_m: z.number().finite().nonnegative().optional(),
+    equipment: z
+      .array(z.string().min(1))
+      .describe("Equipment names used on this leg (see list_equipment), e.g. the bike on a bike leg.")
+      .optional(),
+  })
+  .refine((s) => s.distance_km === undefined || s.distance_m === undefined, {
+    message: "Give distance_km or distance_m, not both.",
+  });
+
+type SegmentArg = z.infer<typeof segmentSchema>;
+
+// Completed legs need a duration: it is the one measure every sport has, and a
+// completed session without it cannot be compared against anything.
+async function resolveSegments(
+  segments: SegmentArg[],
+  status: "planned" | "completed",
+): Promise<{ segments: SegmentInput[] } | { error: string }> {
+  if (status === "completed") {
+    const missing = segments.findIndex((s) => s.duration_min === undefined);
+    if (missing !== -1) return { error: `Segment ${missing + 1} is completed but has no duration_min.` };
+  }
+  const resolved = await resolveUsableEquipment(segments.flatMap((s) => s.equipment ?? []));
+  if ("error" in resolved) return resolved;
+  return {
+    segments: segments.map((s) => ({
+      sport: s.sport,
+      durationMin: s.duration_min ?? null,
+      distanceKm: s.distance_km ?? (s.distance_m !== undefined ? s.distance_m / 1000 : null),
+      equipmentIds: (s.equipment ?? []).map((name) => resolved.ids.get(name.trim().toLowerCase())!),
+    })),
+  };
+}
+
+async function equipmentUsageFor(...sessions: TrainingSession[]) {
+  const ids = [
+    ...new Set(sessions.flatMap((s) => s.segments.flatMap((seg) => seg.equipment.map((e) => e.id)))),
+  ];
+  if (ids.length === 0) return [];
+  return (await listEquipment({ ids })).map((item) => ({
+    name: item.name,
+    usage: presentEquipment(item).usage,
+  }));
 }
 
 const TREND_METRICS = {
@@ -1045,6 +1141,202 @@ const handler = createMcpHandler(
       async ({ id }) => {
         const removed = await deleteSet(id);
         return removed ? ok({ ok: true, deletedId: id }) : fail(`No strength set found with id ${id}.`);
+      }
+    );
+
+    server.registerTool(
+      "log_training_session",
+      {
+        title: "Log a swim, ride, run, or brick",
+        description:
+          "Record one endurance session, planned or completed. A single-sport session has one segment; a brick lists its legs in order (e.g. bike then run). Each segment takes the sport, duration_min (required when completed), distance in distance_km or distance_m (swims usually metres), and the equipment used on that leg by name - equipment must already exist and be in hand (see list_equipment / set_equipment). `date` is the calendar day (YYYY-MM-DD, America/Los_Angeles), defaulting to today. `possibleDuplicates` lists other sessions that day with a leg of the same sport - if one is the same effort, delete this one and use update_training_session on that instead. Returns the stored session and the updated usage of every linked item.",
+        inputSchema: {
+          segments: z.array(segmentSchema).min(1),
+          status: z.enum(SESSION_STATUSES).default("completed"),
+          date: z.string().date().optional(),
+          rpe: z.number().finite().min(0).max(10).optional(),
+          notes: z.string().optional(),
+        },
+      },
+      async ({ segments, status, date, rpe, notes }) => {
+        const resolved = await resolveSegments(segments, status);
+        if ("error" in resolved) return fail(resolved.error);
+        const sessionDate = date ?? dayKeyInZone(new Date());
+        const sports = new Set(segments.map((s) => s.sport));
+        const sameDay = await listTrainingSessions({ from: sessionDate, to: sessionDate });
+
+        const id = await createTrainingSession({
+          sessionDate,
+          status,
+          rpe: rpe ?? null,
+          notes: notes ?? null,
+          segments: resolved.segments,
+        });
+        const session = (await getTrainingSession(id))!;
+        return ok({
+          ok: true,
+          session: presentSession(session),
+          equipment: await equipmentUsageFor(session),
+          possibleDuplicates: sameDay
+            .filter((s) => s.segments.some((seg) => sports.has(seg.sport)))
+            .map((s) => ({ id: s.id, kind: s.kind, status: s.status })),
+        });
+      }
+    );
+
+    server.registerTool(
+      "update_training_session",
+      {
+        title: "Edit a training session",
+        description:
+          "Change a session by `id` (from list_training_sessions): mark a planned session completed, fix its date, RPE, or notes, or replace its segments. Fields left out are unchanged; `notes: null` / `rpe: null` clear them. `segments`, when given, replaces the whole ordered list - pass every leg, including the ones not changing. Equipment usage is derived from the sessions, so an edit never double counts. Returns the stored session and the updated usage of every linked item.",
+        inputSchema: {
+          id: z.number().int().positive(),
+          status: z.enum(SESSION_STATUSES).optional(),
+          date: z.string().date().optional(),
+          rpe: z.number().finite().min(0).max(10).nullable().optional(),
+          notes: z.string().nullable().optional(),
+          segments: z.array(segmentSchema).min(1).optional(),
+        },
+      },
+      async ({ id, status, date, rpe, notes, segments }) => {
+        const current = await getTrainingSession(id);
+        if (!current) return fail(`No training session with id ${id}.`);
+        const nextStatus = status ?? current.status;
+
+        let resolvedSegments: SegmentInput[] | undefined;
+        if (segments) {
+          const resolved = await resolveSegments(segments, nextStatus);
+          if ("error" in resolved) return fail(resolved.error);
+          resolvedSegments = resolved.segments;
+        } else if (nextStatus === "completed") {
+          const missing = current.segments.findIndex((s) => s.durationMin == null);
+          if (missing !== -1) {
+            return fail(`Segment ${missing + 1} has no duration; pass segments with duration_min to complete it.`);
+          }
+        }
+
+        await updateTrainingSession(id, {
+          sessionDate: date,
+          status,
+          rpe,
+          notes,
+          segments: resolvedSegments,
+        });
+        const session = (await getTrainingSession(id))!;
+        // Gear dropped by the edit is reported too: its usage just went down.
+        return ok({
+          ok: true,
+          session: presentSession(session),
+          equipment: await equipmentUsageFor(current, session),
+        });
+      }
+    );
+
+    server.registerTool(
+      "delete_training_session",
+      {
+        title: "Delete a training session",
+        description:
+          "Move a session to the recycle bin by `id`. It stops counting toward equipment usage immediately and can be brought back with restore_training_session.",
+        inputSchema: { id: z.number().int().positive() },
+      },
+      async ({ id }) => {
+        const removed = await setTrainingSessionDeleted(id, true);
+        return removed ? ok({ ok: true, deletedId: id }) : fail(`No active training session with id ${id}.`);
+      }
+    );
+
+    server.registerTool(
+      "restore_training_session",
+      {
+        title: "Restore a deleted training session",
+        description:
+          "Bring back a session deleted with delete_training_session (find its id with list_training_sessions include_deleted=true).",
+        inputSchema: { id: z.number().int().positive() },
+      },
+      async ({ id }) => {
+        const restored = await setTrainingSessionDeleted(id, false);
+        if (!restored) return fail(`No deleted training session with id ${id}.`);
+        return ok({ ok: true, session: presentSession((await getTrainingSession(id))!) });
+      }
+    );
+
+    server.registerTool(
+      "list_training_sessions",
+      {
+        title: "List training sessions",
+        description:
+          "Swim, bike, run, and brick sessions between `from` and `to` (YYYY-MM-DD, inclusive; default the last 28 days through 28 days ahead, so upcoming planned sessions are included), newest first. Each carries its `id`, status (planned/completed), kind, per-leg duration/distance/equipment, and totals. A total is null when any leg lacks that measure. Strength sessions are separate (get_exercise_history).",
+        inputSchema: {
+          from: z.string().date().optional(),
+          to: z.string().date().optional(),
+          status: z.enum(SESSION_STATUSES).optional(),
+          sport: z.enum(SPORTS).optional().describe("Only sessions with a leg of this sport."),
+          include_deleted: z.boolean().default(false),
+        },
+      },
+      async ({ from, to, status, sport, include_deleted }) => {
+        const today = dayKeyInZone(new Date());
+        const range = { from: from ?? shiftDayKey(today, -28), to: to ?? shiftDayKey(today, 28) };
+        const sessions = (
+          await listTrainingSessions({ ...range, status, includeDeleted: include_deleted })
+        ).filter((s) => !sport || s.segments.some((seg) => seg.sport === sport));
+        return ok({ ...range, sessions: sessions.map(presentSession) });
+      }
+    );
+
+    server.registerTool(
+      "set_equipment",
+      {
+        title: "Add or update equipment",
+        description:
+          "Create or update a gear item by `name` (case-insensitive). A new item needs a `category` (bike, wetsuit, shoes, helmet, ...). `status` is needed / owned / rented / borrowed / retired - only owned, rented, or borrowed gear can be logged on a session. Fields left out keep their value; null clears an optional field. Cost is not stored here: record what an item cost as an expense linked to it.",
+        inputSchema: {
+          name: z.string().min(1),
+          category: z.string().min(1).optional(),
+          status: z.enum(EQUIPMENT_STATUSES).optional(),
+          quantity: z.number().int().nonnegative().optional(),
+          location: z.string().nullable().optional(),
+          acquired_on: z.string().date().nullable().optional(),
+          fit_notes: z.string().nullable().optional().describe("Size and fit, e.g. '56cm frame, saddle 72cm'."),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ name, category, status, quantity, location, acquired_on, fit_notes, notes }) => {
+        const result = await setEquipment(name.trim(), {
+          category,
+          status,
+          quantity,
+          location,
+          acquiredOn: acquired_on,
+          fitNotes: fit_notes,
+          notes,
+        });
+        if ("error" in result) return fail(result.error);
+        const [item] = await listEquipment({ ids: [result.id] });
+        return ok({ ok: true, created: result.created, equipment: presentEquipment(item) });
+      }
+    );
+
+    server.registerTool(
+      "list_equipment",
+      {
+        title: "List equipment",
+        description:
+          "Every gear item with its status, details, and usage derived from completed, undeleted sessions it was linked to: session count, total distance (km), total duration (min), and last used date. `segmentsWithoutDistance` counts linked legs that recorded no distance, so distanceKm is a floor while it is above zero.",
+        inputSchema: {
+          status: z.enum(EQUIPMENT_STATUSES).optional(),
+          category: z.string().optional(),
+        },
+      },
+      async ({ status, category }) => {
+        const items = (await listEquipment()).filter(
+          (item) =>
+            (!status || item.status === status) &&
+            (!category || item.category === category.toLowerCase()),
+        );
+        return ok({ equipment: items.map(presentEquipment) });
       }
     );
   },

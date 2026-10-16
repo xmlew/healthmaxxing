@@ -232,6 +232,78 @@ alter table strength_sessions drop constraint if exists strength_sessions_routin
 alter table strength_sessions add constraint strength_sessions_routine_day_id_fkey
   foreign key (routine_day_id) references routine_days (id) on delete set null;
 
+-- Endurance training. A `training_session` is one swim, ride, run, or brick,
+-- planned or completed; PPL lifting stays in strength_sessions. A session is a
+-- date and a status, and its ordered `training_segments` carry the sport,
+-- duration, and distance - a single-sport session has one segment, a brick has
+-- several. Nothing is stored at the session level that a segment already says,
+-- so a session's sport and totals are always read off its segments.
+create table if not exists training_sessions (
+  id bigserial primary key,
+  session_date date not null,
+  status text not null default 'completed',
+  rpe double precision,
+  notes text,
+  -- Soft delete: training history feeds equipment usage and stock balances, so a
+  -- deletion must be recoverable rather than silently rewriting those totals.
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint training_sessions_status_check check (status in ('planned', 'completed')),
+  constraint training_sessions_rpe_check check (rpe is null or rpe between 0 and 10)
+);
+
+create index if not exists training_sessions_date_idx
+  on training_sessions (session_date desc);
+
+create table if not exists training_segments (
+  id bigserial primary key,
+  session_id bigint not null references training_sessions (id) on delete cascade,
+  position integer not null,
+  sport text not null,
+  duration_min double precision,
+  distance_km double precision,
+  created_at timestamptz not null default now(),
+  constraint training_segments_sport_check check (sport in ('swim', 'bike', 'run')),
+  constraint training_segments_duration_check check (duration_min is null or duration_min > 0),
+  constraint training_segments_distance_check check (distance_km is null or distance_km >= 0),
+  unique (session_id, position)
+);
+
+-- Gear inventory. Cost is deliberately absent: what an item cost lives on the
+-- expense that paid for it, so spend is counted in exactly one place. Usage is
+-- likewise derived from the completed segments the item is linked to, never
+-- stored as a counter that edits and retries could drift.
+create table if not exists equipment (
+  id bigserial primary key,
+  name text not null,
+  category text not null,
+  status text not null default 'owned',
+  quantity integer not null default 1,
+  location text,
+  acquired_on date,
+  fit_notes text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint equipment_status_check
+    check (status in ('needed', 'owned', 'rented', 'borrowed', 'retired')),
+  constraint equipment_quantity_check check (quantity >= 0)
+);
+
+create unique index if not exists equipment_name_lower_key on equipment (lower(name));
+
+-- Gear is linked per segment, not per session: in a brick the bike rides the
+-- bike leg and the shoes run the run leg, and each accrues only its own distance.
+create table if not exists training_segment_equipment (
+  segment_id bigint not null references training_segments (id) on delete cascade,
+  equipment_id bigint not null references equipment (id),
+  primary key (segment_id, equipment_id)
+);
+
+create index if not exists training_segment_equipment_equipment_idx
+  on training_segment_equipment (equipment_id);
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,
