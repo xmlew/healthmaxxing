@@ -58,11 +58,19 @@ import {
   type RoutineDay,
 } from "@/lib/routines";
 import {
+  addStockEvent,
+  findConsumableIds,
+  listConsumables,
+  setConsumable,
+  type Consumable,
+} from "@/lib/fuel";
+import {
   createTrainingSession,
   getTrainingSession,
   listTrainingSessions,
   setTrainingSessionDeleted,
   updateTrainingSession,
+  type FuelInput,
   type TrainingSession,
 } from "@/lib/training";
 import type { SegmentInput } from "@/lib/training-segments";
@@ -129,6 +137,7 @@ function presentSession(session: TrainingSession) {
   return {
     ...session,
     totalDistanceKm: session.totalDistanceKm != null ? round2(session.totalDistanceKm) : null,
+    carbsPerHour: session.carbsPerHour != null ? Math.round(session.carbsPerHour) : null,
     segments: session.segments.map((seg) => ({
       ...seg,
       distanceKm: seg.distanceKm != null ? round2(seg.distanceKm) : null,
@@ -187,6 +196,58 @@ async function resolveSegments(
       equipmentIds: (s.equipment ?? []).map((name) => resolved.ids.get(name.trim().toLowerCase())!),
     })),
   };
+}
+
+const fuelSchema = z
+  .array(
+    z.object({
+      product: z.string().min(1).describe("A consumable's name (see list_consumables)."),
+      servings: z.number().finite().positive(),
+    }),
+  )
+  .refine((f) => new Set(f.map((x) => x.product.trim().toLowerCase())).size === f.length, {
+    message: "List each product once, with its total servings.",
+  })
+  .describe(
+    "Fuel taken (completed session) or planned (planned session). Only completed sessions draw down stock.",
+  );
+
+async function resolveFuel(
+  fuel: z.infer<typeof fuelSchema>,
+): Promise<{ fuel: FuelInput[] } | { error: string }> {
+  const found = await findConsumableIds(fuel.map((f) => f.product));
+  if ("error" in found) return found;
+  return {
+    fuel: fuel.map((f) => ({
+      consumableId: found.ids.get(f.product.trim().toLowerCase())!,
+      servings: f.servings,
+    })),
+  };
+}
+
+const round1Servings = (n: number) => Math.round(n * 10) / 10;
+
+function presentConsumable(item: Consumable) {
+  return {
+    ...item,
+    onHand: round1Servings(item.onHand),
+    plannedNeed: round1Servings(item.plannedNeed),
+    shortfall: round1Servings(item.shortfall),
+  };
+}
+
+// Stock of every product a session (before and after an edit) touches, so the
+// response shows what the change did to the balance.
+async function fuelStockFor(...sessions: TrainingSession[]) {
+  const names = [...new Set(sessions.flatMap((s) => s.fuel.map((f) => f.name.toLowerCase())))];
+  if (names.length === 0) return [];
+  const found = await findConsumableIds(names);
+  if ("error" in found) return [];
+  const items = await listConsumables(dayKeyInZone(new Date()), { ids: [...found.ids.values()] });
+  return items.map((item) => {
+    const { name, onHand, plannedNeed, shortfall, servingUnit } = presentConsumable(item);
+    return { name, onHand, plannedNeed, shortfall, servingUnit };
+  });
 }
 
 async function equipmentUsageFor(...sessions: TrainingSession[]) {
@@ -1149,18 +1210,21 @@ const handler = createMcpHandler(
       {
         title: "Log a swim, ride, run, or brick",
         description:
-          "Record one endurance session, planned or completed. A single-sport session has one segment; a brick lists its legs in order (e.g. bike then run). Each segment takes the sport, duration_min (required when completed), distance in distance_km or distance_m (swims usually metres), and the equipment used on that leg by name - equipment must already exist and be in hand (see list_equipment / set_equipment). `date` is the calendar day (YYYY-MM-DD, America/Los_Angeles), defaulting to today. Apple Health swims, rides, and runs are imported automatically and attach to a same-day, same-sport session that has no workout yet, so check `possibleDuplicates` in the response and prefer update_training_session to add gear or notes to a session that already exists. Returns the stored session and the updated usage of every linked item.",
+          "Record one endurance session, planned or completed. A single-sport session has one segment; a brick lists its legs in order (e.g. bike then run). Each segment takes the sport, duration_min (required when completed), distance in distance_km or distance_m (swims usually metres), and the equipment used on that leg by name - equipment must already exist and be in hand (see list_equipment / set_equipment). `fuel` lists products by name and servings - taken on a completed session (drawn from stock), planned on a planned one (counted as upcoming need, never deducted). `date` is the calendar day (YYYY-MM-DD, America/Los_Angeles), defaulting to today. Apple Health swims, rides, and runs are imported automatically and attach to a same-day, same-sport session that has no workout yet, so check `possibleDuplicates` in the response and prefer update_training_session to add gear or notes to a session that already exists. Returns the stored session (with carbsPerHour when every fuel line has a carb figure), the updated usage of every linked item, and the stock left of each fuel used.",
         inputSchema: {
           segments: z.array(segmentSchema).min(1),
+          fuel: fuelSchema.optional(),
           status: z.enum(SESSION_STATUSES).default("completed"),
           date: z.string().date().optional(),
           rpe: z.number().finite().min(0).max(10).optional(),
           notes: z.string().optional(),
         },
       },
-      async ({ segments, status, date, rpe, notes }) => {
+      async ({ segments, fuel, status, date, rpe, notes }) => {
         const resolved = await resolveSegments(segments, status);
         if ("error" in resolved) return fail(resolved.error);
+        const resolvedFuel = await resolveFuel(fuel ?? []);
+        if ("error" in resolvedFuel) return fail(resolvedFuel.error);
         const sessionDate = date ?? dayKeyInZone(new Date());
         const sports = new Set(segments.map((s) => s.sport));
         const sameDay = await listTrainingSessions({ from: sessionDate, to: sessionDate });
@@ -1171,12 +1235,14 @@ const handler = createMcpHandler(
           rpe: rpe ?? null,
           notes: notes ?? null,
           segments: resolved.segments,
+          fuel: resolvedFuel.fuel,
         });
         const session = (await getTrainingSession(id))!;
         return ok({
           ok: true,
           session: presentSession(session),
           equipment: await equipmentUsageFor(session),
+          fuelStock: await fuelStockFor(session),
           possibleDuplicates: sameDay
             .filter((s) => s.segments.some((seg) => sports.has(seg.sport)))
             .map((s) => ({ id: s.id, kind: s.kind, status: s.status, source: s.source })),
@@ -1189,7 +1255,7 @@ const handler = createMcpHandler(
       {
         title: "Edit a training session",
         description:
-          "Change a session by `id` (from list_training_sessions): mark a planned session completed, fix its date, RPE, or notes, or replace its segments. Fields left out are unchanged; `notes: null` / `rpe: null` clear them. `segments`, when given, replaces the whole ordered list - pass every leg, including the ones not changing. Equipment usage is derived from the sessions, so an edit never double counts. Returns the stored session and the updated usage of every linked item.",
+          "Change a session by `id` (from list_training_sessions): mark a planned session completed, fix its date, RPE, or notes, or replace its segments or fuel. Fields left out are unchanged; `notes: null` / `rpe: null` clear them. `segments` and `fuel`, when given, each replace the whole list - pass every leg or product, including the ones not changing (`fuel: []` clears it). Equipment usage and stock are derived from the sessions, so an edit never double counts. Returns the stored session, the updated usage of every linked item, and the stock of every fuel involved.",
         inputSchema: {
           id: z.number().int().positive(),
           status: z.enum(SESSION_STATUSES).optional(),
@@ -1197,9 +1263,10 @@ const handler = createMcpHandler(
           rpe: z.number().finite().min(0).max(10).nullable().optional(),
           notes: z.string().nullable().optional(),
           segments: z.array(segmentSchema).min(1).optional(),
+          fuel: fuelSchema.optional(),
         },
       },
-      async ({ id, status, date, rpe, notes, segments }) => {
+      async ({ id, status, date, rpe, notes, segments, fuel }) => {
         const current = await getTrainingSession(id);
         if (!current) return fail(`No training session with id ${id}.`);
         const nextStatus = status ?? current.status;
@@ -1216,19 +1283,28 @@ const handler = createMcpHandler(
           }
         }
 
+        let resolvedFuel: FuelInput[] | undefined;
+        if (fuel) {
+          const found = await resolveFuel(fuel);
+          if ("error" in found) return fail(found.error);
+          resolvedFuel = found.fuel;
+        }
+
         await updateTrainingSession(id, {
           sessionDate: date,
           status,
           rpe,
           notes,
           segments: resolvedSegments,
+          fuel: resolvedFuel,
         });
         const session = (await getTrainingSession(id))!;
-        // Gear dropped by the edit is reported too: its usage just went down.
+        // Gear and fuel dropped by the edit are reported too: their totals moved.
         return ok({
           ok: true,
           session: presentSession(session),
           equipment: await equipmentUsageFor(current, session),
+          fuelStock: await fuelStockFor(current, session),
         });
       }
     );
@@ -1337,6 +1413,84 @@ const handler = createMcpHandler(
             (!category || item.category === category.toLowerCase()),
         );
         return ok({ equipment: items.map(presentEquipment) });
+      }
+    );
+
+    server.registerTool(
+      "set_consumable",
+      {
+        title: "Add or update a fuel product",
+        description:
+          "Create or update a consumable (gel, drink mix, electrolyte, bar, ...) by `name` (case-insensitive). Stock is counted in servings of `serving_unit` (gel, scoop, tab); nutrition is per serving and optional - give it where the label says, since carbs per hour is computed from it. `low_stock_servings` sets the balance at or below which it is flagged. A new product needs a `kind`. Fields left out keep their value; null clears an optional one. Stock is changed with adjust_stock, not here.",
+        inputSchema: {
+          name: z.string().min(1),
+          kind: z.string().min(1).optional(),
+          serving_unit: z.string().min(1).optional(),
+          carbs_g: z.number().finite().nonnegative().nullable().optional(),
+          sodium_mg: z.number().finite().nonnegative().nullable().optional(),
+          caffeine_mg: z.number().finite().nonnegative().nullable().optional(),
+          low_stock_servings: z.number().finite().nonnegative().nullable().optional(),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ name, kind, serving_unit, carbs_g, sodium_mg, caffeine_mg, low_stock_servings, notes }) => {
+        const result = await setConsumable(name.trim(), {
+          kind,
+          servingUnit: serving_unit,
+          carbsG: carbs_g,
+          sodiumMg: sodium_mg,
+          caffeineMg: caffeine_mg,
+          lowStockServings: low_stock_servings,
+          notes,
+        });
+        if ("error" in result) return fail(result.error);
+        const [item] = await listConsumables(dayKeyInZone(new Date()), { ids: [result.id] });
+        return ok({ ok: true, created: result.created, consumable: presentConsumable(item) });
+      }
+    );
+
+    server.registerTool(
+      "adjust_stock",
+      {
+        title: "Adjust fuel stock",
+        description:
+          "Add or remove servings of a consumable outside of training: a starting count, a gift, a lost or binned bag. Positive `servings` adds a lot (give `expires_on` from the packet so expiry can be tracked); negative removes. Fuel used in a session is recorded on the session (log_training_session `fuel`), not here. Returns the new balance.",
+        inputSchema: {
+          product: z.string().min(1),
+          servings: z.number().finite().refine((n) => n !== 0, "servings cannot be 0"),
+          expires_on: z.string().date().optional(),
+          date: z.string().date().optional(),
+          note: z.string().optional(),
+        },
+      },
+      async ({ product, servings, expires_on, date, note }) => {
+        if (expires_on && servings < 0) return fail("expires_on applies only when adding servings.");
+        const found = await findConsumableIds([product]);
+        if ("error" in found) return fail(found.error);
+        const consumableId = [...found.ids.values()][0];
+        const today = dayKeyInZone(new Date());
+        await addStockEvent({
+          consumableId,
+          servings,
+          occurredOn: date ?? today,
+          expiresOn: expires_on ?? null,
+          note: note ?? null,
+        });
+        const [item] = await listConsumables(today, { ids: [consumableId] });
+        return ok({ ok: true, consumable: presentConsumable(item) });
+      }
+    );
+
+    server.registerTool(
+      "list_consumables",
+      {
+        title: "List fuel stock",
+        description:
+          "Every consumable with its nutrition per serving and its stock: `onHand` (adjustments minus servings on completed sessions), `plannedNeed` (servings on planned sessions from today on, not yet deducted), `shortfall` (need beyond what is on hand), and `lowStock` (at or below its low_stock_servings). `expiry` counts servings already expired and expiring within 30 days, assuming the earliest-expiring servings were used first - lot-level use is not recorded. A negative onHand means more was logged as used than was ever stocked: a starting count is missing.",
+      },
+      async () => {
+        const items = await listConsumables(dayKeyInZone(new Date()));
+        return ok({ consumables: items.map(presentConsumable) });
       }
     );
   },

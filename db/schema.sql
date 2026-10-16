@@ -314,6 +314,56 @@ create table if not exists training_segment_equipment (
 create index if not exists training_segment_equipment_equipment_idx
   on training_segment_equipment (equipment_id);
 
+-- Fuel and other consumables, counted in servings (one gel, one scoop, one
+-- tab). Nutrition is per serving and optional. Stock on hand is never stored:
+-- it is the sum of stock_events minus the servings recorded on completed,
+-- undeleted sessions, so editing or deleting a
+-- session moves the balance exactly once.
+create table if not exists consumables (
+  id bigserial primary key,
+  name text not null,
+  kind text not null,
+  serving_unit text not null default 'serving',
+  carbs_g double precision,
+  sodium_mg double precision,
+  caffeine_mg double precision,
+  -- The balance at or below which stock is flagged as low; no flag when unset.
+  low_stock_servings double precision,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists consumables_name_lower_key on consumables (lower(name));
+
+-- Changes to the count on hand: a starting count, a gift, a lost bag. A positive
+-- event is a lot, with its expiry when known.
+create table if not exists stock_events (
+  id bigserial primary key,
+  consumable_id bigint not null references consumables (id),
+  servings double precision not null,
+  occurred_on date not null,
+  expires_on date,
+  note text,
+  created_at timestamptz not null default now(),
+  constraint stock_events_nonzero check (servings <> 0)
+);
+
+create index if not exists stock_events_consumable_idx on stock_events (consumable_id);
+
+-- Fuel taken (completed session) or planned (planned session). One row per
+-- product per session, so an edit replaces the count instead of adding to it.
+create table if not exists training_session_fuel (
+  session_id bigint not null references training_sessions (id) on delete cascade,
+  consumable_id bigint not null references consumables (id),
+  servings double precision not null,
+  primary key (session_id, consumable_id),
+  constraint training_session_fuel_servings_check check (servings > 0)
+);
+
+create index if not exists training_session_fuel_consumable_idx
+  on training_session_fuel (consumable_id);
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,

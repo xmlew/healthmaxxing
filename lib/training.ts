@@ -1,6 +1,6 @@
 import { sql } from "./db";
 import { sessionKind, type SessionKind, type SessionStatus, type Sport } from "./sports";
-import { insertSegments, type SegmentInput } from "./training-segments";
+import { insertSegments, type Db, type SegmentInput } from "./training-segments";
 
 export type SegmentEquipment = { id: number; name: string };
 
@@ -10,6 +10,16 @@ export type TrainingSegment = {
   durationMin: number | null;
   distanceKm: number | null;
   equipment: SegmentEquipment[];
+};
+
+export type FuelInput = { consumableId: number; servings: number };
+
+export type SessionFuel = {
+  name: string;
+  servings: number;
+  servingUnit: string;
+  // For these servings; null when the product has no carb figure.
+  carbsG: number | null;
 };
 
 export type TrainingSession = {
@@ -25,6 +35,9 @@ export type TrainingSession = {
   totalDistanceKm: number | null;
   deletedAt: string | null;
   segments: TrainingSegment[];
+  fuel: SessionFuel[];
+  // Only when every fuel line has a carb figure and the duration is known.
+  carbsPerHour: number | null;
 };
 
 // A total is only reported when every segment supplied that measure: summing the
@@ -38,12 +51,23 @@ function toDateStr(value: unknown): string {
   return value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
 }
 
+async function replaceFuel(db: Db, sessionId: number, fuel: FuelInput[]): Promise<void> {
+  await db`delete from training_session_fuel where session_id = ${sessionId}`;
+  if (fuel.length === 0) return;
+  await db`
+    insert into training_session_fuel ${db(
+      fuel.map((f) => ({ session_id: sessionId, consumable_id: f.consumableId, servings: f.servings })),
+    )}
+  `;
+}
+
 export async function createTrainingSession(input: {
   sessionDate: string;
   status: SessionStatus;
   rpe: number | null;
   notes: string | null;
   segments: SegmentInput[];
+  fuel: FuelInput[];
 }): Promise<number> {
   return sql.begin(async (tx) => {
     const [row] = await tx`
@@ -53,13 +77,15 @@ export async function createTrainingSession(input: {
     `;
     const id = Number(row.id);
     await insertSegments(tx, id, input.segments);
+    await replaceFuel(tx, id, input.fuel);
     return id;
   });
 }
 
 // Fields left undefined keep their stored value. `segments`, when given,
-// replaces the whole ordered list: a session's legs are edited as a unit, and
-// replacing them is what keeps derived usage exact after an edit.
+// replaces the whole ordered list, and `fuel` the whole fuel list: each is
+// edited as a unit, and replacing it is what keeps derived usage and stock
+// exact after an edit.
 export async function updateTrainingSession(
   id: number,
   patch: {
@@ -68,6 +94,7 @@ export async function updateTrainingSession(
     rpe?: number | null;
     notes?: string | null;
     segments?: SegmentInput[];
+    fuel?: FuelInput[];
   },
 ): Promise<boolean> {
   return sql.begin(async (tx) => {
@@ -88,6 +115,7 @@ export async function updateTrainingSession(
       await tx`delete from training_segments where session_id = ${id}`;
       await insertSegments(tx, id, patch.segments);
     }
+    if (patch.fuel) await replaceFuel(tx, id, patch.fuel);
     return true;
   });
 }
@@ -144,6 +172,25 @@ export async function listTrainingSessions(filter: {
     order by seg.session_id, seg.position
   `;
 
+  const fuelRows = await sql`
+    select f.session_id, c.name, f.servings, c.serving_unit, c.carbs_g
+    from training_session_fuel f
+    join consumables c on c.id = f.consumable_id
+    where f.session_id = any(${sessionIds})
+    order by c.name
+  `;
+  const fuelBySession = new Map<number, SessionFuel[]>();
+  for (const f of fuelRows) {
+    const list = fuelBySession.get(Number(f.session_id)) ?? [];
+    list.push({
+      name: f.name as string,
+      servings: Number(f.servings),
+      servingUnit: f.serving_unit as string,
+      carbsG: f.carbs_g == null ? null : Number(f.carbs_g) * Number(f.servings),
+    });
+    fuelBySession.set(Number(f.session_id), list);
+  }
+
   const bySession = new Map<number, TrainingSegment[]>();
   for (const s of segments) {
     const list = bySession.get(Number(s.session_id)) ?? [];
@@ -162,6 +209,11 @@ export async function listTrainingSessions(filter: {
 
   return sessions.map((s) => {
     const segs = bySession.get(Number(s.id)) ?? [];
+    const fuel = fuelBySession.get(Number(s.id)) ?? [];
+    const totalDurationMin = totalOf(segs, "durationMin");
+    const totalCarbsG = fuel.every((f) => f.carbsG != null)
+      ? fuel.reduce((sum, f) => sum + (f.carbsG as number), 0)
+      : null;
     return {
       id: Number(s.id),
       date: toDateStr(s.session_date),
@@ -171,10 +223,15 @@ export async function listTrainingSessions(filter: {
       workoutId: (s.workout_id as string | null) ?? null,
       rpe: s.rpe == null ? null : Number(s.rpe),
       notes: (s.notes as string | null) ?? null,
-      totalDurationMin: totalOf(segs, "durationMin"),
+      totalDurationMin,
       totalDistanceKm: totalOf(segs, "distanceKm"),
       deletedAt: s.deleted_at ? (s.deleted_at as Date).toISOString() : null,
       segments: segs,
+      fuel,
+      carbsPerHour:
+        fuel.length > 0 && totalCarbsG != null && totalDurationMin != null
+          ? totalCarbsG / (totalDurationMin / 60)
+          : null,
     };
   });
 }

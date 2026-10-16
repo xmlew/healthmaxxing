@@ -34,7 +34,13 @@ type Session = {
   totalDurationMin: number | null;
   segments: Segment[];
 };
-type LoggedSession = { session: Session; equipment: { name: string; usage: Usage }[] };
+type Stock = { name: string; onHand: number; plannedNeed: number; shortfall: number };
+type LoggedSession = {
+  session: Session & { carbsPerHour: number | null };
+  equipment: { name: string; usage: Usage }[];
+  fuelStock: Stock[];
+};
+const GEL = `${TAG}gel`;
 
 async function removeTestRows(): Promise<void> {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
@@ -44,6 +50,11 @@ async function removeTestRows(): Promise<void> {
       where notes like ${`${TAG}%`} or workout_id like ${`${TAG}%`}
     `;
     await sql`delete from equipment where name like ${`${TAG}%`}`;
+    await sql`
+      delete from stock_events
+      where consumable_id in (select id from consumables where name like ${`${TAG}%`})
+    `;
+    await sql`delete from consumables where name like ${`${TAG}%`}`;
     await sql`delete from workouts where id like ${`${TAG}%`}`;
   } finally {
     await sql.end();
@@ -55,6 +66,15 @@ async function usageOf(name: string): Promise<Usage> {
   const item = equipment.find((e) => e.name === name);
   assert.ok(item, `${name} is listed`);
   return item.usage;
+}
+
+async function stockOf(name: string) {
+  const { consumables } = await callTool<{
+    consumables: (Stock & { expiry: { expiredServings: number } })[];
+  }>("list_consumables");
+  const item = consumables.find((c) => c.name === name);
+  assert.ok(item, `${name} is listed`);
+  return item;
 }
 
 async function sessionsOn(date: string, includeDeleted = false): Promise<Session[]> {
@@ -283,4 +303,75 @@ test("Apple Health swims, rides, and runs become sessions without duplicating lo
   const day = await sessionsOn("2020-03-13");
   assert.equal(day.length, 1, "only the ride became a session");
   assert.equal(day[0].segments[0].distanceKm, null);
+});
+
+test("fuel used on a session draws down stock exactly once, through edits and deletes", async () => {
+  await callTool("set_consumable", { name: GEL, kind: "gel", serving_unit: "gel", carbs_g: 22 });
+  await callTool("adjust_stock", { product: GEL, servings: 6, note: "starting count" });
+  assert.equal((await stockOf(GEL)).onHand, 6);
+
+  const logged = await callTool<LoggedSession>("log_training_session", {
+    date: "2020-03-20",
+    segments: [{ sport: "bike", duration_min: 60, distance_km: 30 }],
+    fuel: [{ product: GEL, servings: 2 }],
+    notes: TAG,
+  });
+  assert.deepEqual(logged.fuelStock.map((f) => [f.name, f.onHand]), [[GEL, 4]], "the response shows 4 left");
+  assert.equal(logged.session.carbsPerHour, 44, "2 x 22 g over one hour");
+
+  const edited = await callTool<LoggedSession>("update_training_session", {
+    id: logged.session.id,
+    fuel: [{ product: GEL, servings: 1 }],
+  });
+  assert.equal(edited.fuelStock[0].onHand, 5, "editing 2 down to 1 leaves 5, not 3");
+
+  await callTool("delete_training_session", { id: logged.session.id });
+  assert.equal((await stockOf(GEL)).onHand, 6, "a deleted session gives its fuel back");
+  await callTool("restore_training_session", { id: logged.session.id });
+  assert.equal((await stockOf(GEL)).onHand, 5);
+});
+
+test("planned fuel is a need, never a deduction", async () => {
+  const before = await stockOf(GEL);
+  const planned = await callTool<LoggedSession>("log_training_session", {
+    date: "2099-01-01",
+    status: "planned",
+    segments: [{ sport: "bike", distance_km: 90 }],
+    fuel: [{ product: GEL, servings: before.onHand + 3 }],
+    notes: TAG,
+  });
+  const after = await stockOf(GEL);
+  assert.equal(after.onHand, before.onHand, "nothing is deducted for a planned session");
+  assert.equal(after.plannedNeed, before.plannedNeed + before.onHand + 3);
+  assert.equal(after.shortfall, after.plannedNeed - after.onHand, "the gap to the plan is reported");
+
+  await callTool("delete_training_session", { id: planned.session.id });
+  assert.equal((await stockOf(GEL)).plannedNeed, before.plannedNeed, "a deleted plan is no longer a need");
+});
+
+test("expired lots are flagged and fuel inputs are validated", async () => {
+  const salt = `${TAG}salt tabs`;
+  await callTool("set_consumable", { name: salt, kind: "electrolyte", serving_unit: "tab" });
+  await callTool("adjust_stock", { product: salt, servings: 4, expires_on: "2020-01-01" });
+  await callTool("adjust_stock", { product: salt, servings: 10, expires_on: "2099-01-01" });
+  assert.equal((await stockOf(salt)).expiry.expiredServings, 4);
+
+  const unknown = await callToolError("log_training_session", {
+    date: "2020-03-21",
+    segments: [{ sport: "run", duration_min: 30 }],
+    fuel: [{ product: `${TAG}nope`, servings: 1 }],
+    notes: TAG,
+  });
+  assert.match(unknown, /Unknown fuel/);
+  const twice = await callToolError("log_training_session", {
+    date: "2020-03-21",
+    segments: [{ sport: "run", duration_min: 30 }],
+    fuel: [
+      { product: salt, servings: 1 },
+      { product: salt.toUpperCase(), servings: 1 },
+    ],
+    notes: TAG,
+  });
+  assert.match(twice, /each product once/);
+  assert.equal((await sessionsOn("2020-03-21", true)).length, 0, "refused calls wrote nothing");
 });
