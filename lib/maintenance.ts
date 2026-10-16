@@ -1,4 +1,5 @@
 import { sql } from "./db";
+import { daysBetween } from "./time";
 
 // "Approaching" from this share of any interval, so a check can be planned
 // before the ride that crosses it rather than noticed after.
@@ -54,10 +55,6 @@ function evaluate(
     state,
     reasons: measures.map((m) => `${m.label(m.used)} of every ${m.label(m.interval)}`),
   };
-}
-
-function daysBetween(from: string, to: string): number {
-  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
 }
 
 export async function listMaintenance(
