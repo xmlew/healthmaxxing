@@ -1,4 +1,4 @@
-import { sql } from "./db";
+import { sql, valueOrKeep } from "./db";
 import { daysBetween } from "./time";
 
 // "Approaching" from this share of any interval, so a check can be planned
@@ -164,15 +164,13 @@ export async function setMaintenanceRule(
       `;
       return { id: Number(row.id), created: true };
     }
-    const keep = (value: unknown, column: string) =>
-      value === undefined ? sql(column) : sql`${value as string | number | null}`;
     await sql`
       update maintenance_rules set
-        interval_days = ${keep(patch.intervalDays, "interval_days")},
-        interval_km = ${keep(patch.intervalKm, "interval_km")},
-        interval_hours = ${keep(patch.intervalHours, "interval_hours")},
+        interval_days = ${valueOrKeep(sql, patch.intervalDays, "interval_days")},
+        interval_km = ${valueOrKeep(sql, patch.intervalKm, "interval_km")},
+        interval_hours = ${valueOrKeep(sql, patch.intervalHours, "interval_hours")},
         starts_on = coalesce(${patch.startsOn ?? null}::date, starts_on),
-        notes = ${keep(patch.notes, "notes")},
+        notes = ${valueOrKeep(sql, patch.notes, "notes")},
         updated_at = now()
       where id = ${existingId}
     `;

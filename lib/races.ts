@@ -1,4 +1,4 @@
-import { sql } from "./db";
+import { sql, valueOrKeep } from "./db";
 import { listExpenses, summarizeBudget, type BudgetSummary } from "./expenses";
 import { SPORTS, type Sport } from "./sports";
 import { daysBetween, shiftDayKey } from "./time";
@@ -81,18 +81,16 @@ export async function setRace(
     `;
     return { race: toRace(row), created: true };
   }
-  const keep = (value: unknown, column: string) =>
-    value === undefined ? sql(column) : sql`${value as string | number | null}`;
   const [row] = await sql`
     update races set
       race_date = coalesce(${patch.raceDate ?? null}::date, race_date),
-      location = ${keep(patch.location, "location")},
-      swim_km = ${keep(patch.swimKm, "swim_km")},
-      bike_km = ${keep(patch.bikeKm, "bike_km")},
-      run_km = ${keep(patch.runKm, "run_km")},
-      goal = ${keep(patch.goal, "goal")},
-      budget_usd = ${keep(patch.budgetUsd, "budget_usd")},
-      notes = ${keep(patch.notes, "notes")},
+      location = ${valueOrKeep(sql, patch.location, "location")},
+      swim_km = ${valueOrKeep(sql, patch.swimKm, "swim_km")},
+      bike_km = ${valueOrKeep(sql, patch.bikeKm, "bike_km")},
+      run_km = ${valueOrKeep(sql, patch.runKm, "run_km")},
+      goal = ${valueOrKeep(sql, patch.goal, "goal")},
+      budget_usd = ${valueOrKeep(sql, patch.budgetUsd, "budget_usd")},
+      notes = ${valueOrKeep(sql, patch.notes, "notes")},
       updated_at = now()
     where id = ${existing.id}
     returning ${RACE_COLUMNS}
@@ -394,8 +392,6 @@ export async function setRaceTask(
       }
       await tx`update expenses set race_id = ${raceId}, updated_at = now() where id = ${patch.expenseId}`;
     }
-    const keep = (value: unknown, column: string) =>
-      value === undefined ? tx(column) : tx`${value as string | number | null}`;
     const keepDate = (value: string | null | undefined, column: string) =>
       value === undefined ? tx(column) : tx`${value}::date`;
     await tx`
@@ -409,9 +405,9 @@ export async function setRaceTask(
         category = ${patch.category === undefined ? tx`race_tasks.category` : patch.category.toLowerCase()},
         due_on = ${keepDate(patch.dueOn, "race_tasks.due_on")},
         done_on = ${keepDate(patch.doneOn, "race_tasks.done_on")},
-        confirmation = ${keep(patch.confirmation, "race_tasks.confirmation")},
-        expense_id = ${keep(patch.expenseId, "race_tasks.expense_id")},
-        notes = ${keep(patch.notes, "race_tasks.notes")},
+        confirmation = ${valueOrKeep(tx, patch.confirmation, "race_tasks.confirmation")},
+        expense_id = ${valueOrKeep(tx, patch.expenseId, "race_tasks.expense_id")},
+        notes = ${valueOrKeep(tx, patch.notes, "race_tasks.notes")},
         updated_at = now()
     `;
     return null;

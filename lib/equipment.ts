@@ -1,4 +1,4 @@
-import { sql } from "./db";
+import { sql, valueOrKeep } from "./db";
 
 export const EQUIPMENT_STATUSES = ["needed", "owned", "rented", "borrowed", "retired"] as const;
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
@@ -60,17 +60,15 @@ export async function setEquipment(
     `;
     return { id: Number(row.id), created: true };
   }
-  const keep = (value: unknown, column: string) =>
-    value === undefined ? sql(column) : sql`${value as string | number | null}`;
   await sql`
     update equipment set
       category = ${patch.category === undefined ? sql`category` : patch.category.toLowerCase()},
-      status = ${keep(patch.status, "status")},
-      quantity = ${keep(patch.quantity, "quantity")},
-      location = ${keep(patch.location, "location")},
+      status = ${valueOrKeep(sql, patch.status, "status")},
+      quantity = ${valueOrKeep(sql, patch.quantity, "quantity")},
+      location = ${valueOrKeep(sql, patch.location, "location")},
       acquired_on = ${patch.acquiredOn === undefined ? sql`acquired_on` : sql`${patch.acquiredOn}::date`},
-      fit_notes = ${keep(patch.fitNotes, "fit_notes")},
-      notes = ${keep(patch.notes, "notes")},
+      fit_notes = ${valueOrKeep(sql, patch.fitNotes, "fit_notes")},
+      notes = ${valueOrKeep(sql, patch.notes, "notes")},
       updated_at = now()
     where id = ${existing.id}
   `;

@@ -1,4 +1,4 @@
-import { sql, type Db } from "./db";
+import { sql, type Db, valueOrKeep } from "./db";
 import { addStockEvent } from "./fuel";
 
 export const BASE_CURRENCY = "USD";
@@ -147,19 +147,17 @@ export async function updateExpense(
     if (currency === BASE_CURRENCY && usdPerUnit != null) {
       return { error: `A ${BASE_CURRENCY} expense takes no rate.` };
     }
-    const keep = (value: unknown, column: string) =>
-      value === undefined ? tx(column) : tx`${value as string | number | null}`;
     const [row] = await tx`
       update expenses set
-        description = ${keep(patch.description, "description")},
-        category = ${keep(patch.category, "category")},
-        status = ${keep(patch.status, "status")},
+        description = ${valueOrKeep(tx, patch.description, "description")},
+        category = ${valueOrKeep(tx, patch.category, "category")},
+        status = ${valueOrKeep(tx, patch.status, "status")},
         expense_date = coalesce(${patch.date ?? null}::date, expense_date),
-        amount = ${keep(patch.amount, "amount")},
+        amount = ${valueOrKeep(tx, patch.amount, "amount")},
         currency = ${currency},
         usd_per_unit = ${usdPerUnit},
-        race_id = ${keep(patch.raceId, "race_id")},
-        notes = ${keep(patch.notes, "notes")},
+        race_id = ${valueOrKeep(tx, patch.raceId, "race_id")},
+        notes = ${valueOrKeep(tx, patch.notes, "notes")},
         updated_at = now()
       where id = ${id}
       returning equipment_id, category, status, to_char(expense_date, 'YYYY-MM-DD') as date

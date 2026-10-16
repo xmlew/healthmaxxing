@@ -1,4 +1,4 @@
-import { sql, type Db } from "./db";
+import { sql, type Db, valueOrKeep } from "./db";
 import { expiryOf, type ExpiryStatus } from "./fuel-expiry";
 
 export type ConsumablePatch = {
@@ -51,17 +51,15 @@ export async function setConsumable(
     `;
     return { id: Number(row.id), created: true };
   }
-  const keep = (value: unknown, column: string) =>
-    value === undefined ? sql(column) : sql`${value as string | number | null}`;
   await sql`
     update consumables set
       kind = ${patch.kind === undefined ? sql`kind` : patch.kind.toLowerCase()},
-      serving_unit = ${keep(patch.servingUnit, "serving_unit")},
-      carbs_g = ${keep(patch.carbsG, "carbs_g")},
-      sodium_mg = ${keep(patch.sodiumMg, "sodium_mg")},
-      caffeine_mg = ${keep(patch.caffeineMg, "caffeine_mg")},
-      low_stock_servings = ${keep(patch.lowStockServings, "low_stock_servings")},
-      notes = ${keep(patch.notes, "notes")},
+      serving_unit = ${valueOrKeep(sql, patch.servingUnit, "serving_unit")},
+      carbs_g = ${valueOrKeep(sql, patch.carbsG, "carbs_g")},
+      sodium_mg = ${valueOrKeep(sql, patch.sodiumMg, "sodium_mg")},
+      caffeine_mg = ${valueOrKeep(sql, patch.caffeineMg, "caffeine_mg")},
+      low_stock_servings = ${valueOrKeep(sql, patch.lowStockServings, "low_stock_servings")},
+      notes = ${valueOrKeep(sql, patch.notes, "notes")},
       updated_at = now()
     where id = ${existing.id}
   `;
