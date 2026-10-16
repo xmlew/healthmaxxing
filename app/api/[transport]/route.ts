@@ -223,12 +223,14 @@ type SegmentArg = z.infer<typeof segmentSchema>;
 async function resolveSegments(
   segments: SegmentArg[],
   status: "planned" | "completed",
+  editing?: TrainingSession,
 ): Promise<{ segments: SegmentInput[] } | { error: string }> {
   if (status === "completed") {
     const missing = segments.findIndex((s) => s.duration_min === undefined);
     if (missing !== -1) return { error: `Segment ${missing + 1} is completed but has no duration_min.` };
   }
-  const resolved = await resolveUsableEquipment(segments.flatMap((s) => s.equipment ?? []));
+  const alreadyLinked = new Set(editing?.segments.flatMap((seg) => seg.equipment.map((e) => e.id)) ?? []);
+  const resolved = await resolveUsableEquipment(segments.flatMap((s) => s.equipment ?? []), alreadyLinked);
   if ("error" in resolved) return resolved;
   return {
     segments: segments.map((s) => ({
@@ -1345,7 +1347,7 @@ const handler = createMcpHandler(
 
         let resolvedSegments: SegmentInput[] | undefined;
         if (segments) {
-          const resolved = await resolveSegments(segments, nextStatus);
+          const resolved = await resolveSegments(segments, nextStatus, current);
           if ("error" in resolved) return fail(resolved.error);
           resolvedSegments = resolved.segments;
         } else if (nextStatus === "completed") {

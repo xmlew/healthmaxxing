@@ -942,3 +942,25 @@ test("re-applying a race format keeps course distances already set", async () =>
   assert.equal(updated.race.swimKm, 1.9, "the measured course swim is kept");
   assert.equal(updated.race.bikeKm, 90.12, "a missing distance is filled");
 });
+
+test("sessions stay editable after their gear is retired", async () => {
+  const oldBike = `${TAG}old bike`;
+  await callTool("set_equipment", { name: oldBike, category: "bike" });
+  const oldRide = await callTool<LoggedSession>("log_training_session", {
+    date: "2020-08-02",
+    segments: [{ sport: "bike", duration_min: 60, distance_km: 30, equipment: [oldBike] }],
+    notes: TAG,
+  });
+  await callTool("set_equipment", { name: oldBike, status: "retired" });
+  await callTool("update_training_session", {
+    id: oldRide.session.id,
+    segments: [{ sport: "bike", duration_min: 60, distance_km: 31, equipment: [oldBike] }],
+  });
+  assert.equal((await usageOf(oldBike)).distanceKm, 31);
+  const refused = await callToolError("log_training_session", {
+    date: "2020-08-03",
+    segments: [{ sport: "bike", duration_min: 60, equipment: [oldBike] }],
+    notes: TAG,
+  });
+  assert.match(refused, /Not in hand/, "new sessions still refuse retired gear");
+});

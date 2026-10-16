@@ -122,9 +122,12 @@ export async function listEquipment(filter: { ids?: number[] } = {}): Promise<Eq
 
 // Resolves names to ids for linking to a session, refusing anything that is not
 // in hand. Unknown names fail rather than creating gear, so a typo cannot add a
-// phantom item to the inventory.
+// phantom item to the inventory. Items in `alreadyLinked` (the gear a session
+// being edited already records) pass whatever their status now: retiring a bike
+// must not make last year's rides uneditable or drop them from its history.
 export async function resolveUsableEquipment(
   names: string[],
+  alreadyLinked: ReadonlySet<number> = new Set(),
 ): Promise<{ ids: Map<string, number> } | { error: string }> {
   const unique = [...new Set(names.map((n) => n.trim().toLowerCase()))];
   if (unique.length === 0) return { ids: new Map() };
@@ -141,7 +144,9 @@ export async function resolveUsableEquipment(
       }. Add it with set_equipment first.`,
     };
   }
-  const notInHand = rows.filter((r) => !USABLE_STATUSES.includes(r.status as EquipmentStatus));
+  const notInHand = rows.filter(
+    (r) => !USABLE_STATUSES.includes(r.status as EquipmentStatus) && !alreadyLinked.has(Number(r.id)),
+  );
   if (notInHand.length > 0) {
     return {
       error: `Not in hand: ${notInHand
