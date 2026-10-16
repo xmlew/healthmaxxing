@@ -153,7 +153,9 @@ async function linkImportedWorkout(sql: Db, workout: ImportedWorkout): Promise<v
 
 // Apple Health names a workout by activity and setting ("Outdoor Cycling",
 // "Pool Swim", "Indoor Run"), so the sport is the activity word. Walks, hikes,
-// and strength sessions match none and stay workouts only.
+// and strength sessions match none and stay workouts only; a name matching
+// several sports is a multisport workout whose legs cannot be told apart, so it
+// stays a workout too rather than becoming one long leg of the first sport.
 const SPORT_PATTERNS: [RegExp, Sport][] = [
   [/\bswim/i, "swim"],
   [/\b(cycling|bike|biking)\b/i, "bike"],
@@ -162,7 +164,8 @@ const SPORT_PATTERNS: [RegExp, Sport][] = [
 
 function sportForWorkout(name: string | undefined): Sport | null {
   if (!name) return null;
-  return SPORT_PATTERNS.find(([pattern]) => pattern.test(name))?.[1] ?? null;
+  const matches = SPORT_PATTERNS.filter(([pattern]) => pattern.test(name));
+  return matches.length === 1 ? matches[0][1] : null;
 }
 
 const KM_PER_UNIT: Record<string, number> = { km: 1, m: 0.001, mi: 1.609344, yd: 0.0009144 };

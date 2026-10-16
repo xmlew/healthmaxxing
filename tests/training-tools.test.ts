@@ -925,3 +925,8 @@ test("an aborted Apple Health workout neither breaks the import nor leaves a hol
   const day = await sessionsOn("2020-08-01");
   assert.deepEqual(day.map((s) => s.kind), ["bike"], "the rest of the payload still lands");
 });
+
+test("a workout naming several sports is not guessed into one", async () => {
+  await ingest([{ id: `${TAG}multi`, name: "Swim Bike Run", start: "2020-08-04 08:00:00 -0700", duration: 3600 }]);
+  assert.equal((await sessionsOn("2020-08-04")).length, 0);
+});
