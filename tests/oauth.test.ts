@@ -2,10 +2,10 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import dotenv from "dotenv";
+import { selectTestDatabase } from "./support/test-db";
 import postgres from "postgres";
 
-dotenv.config({ path: ".env.local" });
+selectTestDatabase();
 
 // Separate port from mcp-tools.test.ts so both suites can spawn their own server;
 // node --test runs each test file in its own process.

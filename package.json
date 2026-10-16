@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "pretest": "next build",
+    "pretest": "next build && tsx scripts/prepare-test-db.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:import": "tsx scripts/import.ts",

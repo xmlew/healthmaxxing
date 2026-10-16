@@ -1,10 +1,10 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import dotenv from "dotenv";
+import { selectTestDatabase } from "./support/test-db";
 import postgres from "postgres";
 
-dotenv.config({ path: ".env.local" });
+selectTestDatabase();
 
 const PORT = 3130;
 const BASE = `http://localhost:${PORT}`;
