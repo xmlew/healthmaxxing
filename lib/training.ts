@@ -1,6 +1,6 @@
-import { sql } from "./db";
+import { sql, type Db } from "./db";
 import { sessionKind, type SessionKind, type SessionStatus, type Sport } from "./sports";
-import { insertSegments, type Db, type SegmentInput } from "./training-segments";
+import { insertSegments, type SegmentInput } from "./training-segments";
 
 export type SegmentEquipment = { id: number; name: string };
 

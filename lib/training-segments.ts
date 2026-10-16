@@ -1,7 +1,5 @@
-import type { Sql, TransactionSql } from "postgres";
+import type { Db } from "./db";
 import type { Sport } from "./sports";
-
-export type Db = Sql | TransactionSql;
 
 export type SegmentInput = {
   sport: Sport;
@@ -10,7 +8,7 @@ export type SegmentInput = {
   equipmentIds: number[];
 };
 
-// Takes its connection rather than importing lib/db, so a caller can write a
+// Takes its connection rather than using lib/db's pool, so a caller can write a
 // session's segments inside the transaction that writes the session, and so
 // ingest (which the import script loads before configuring the environment)
 // can write them too.

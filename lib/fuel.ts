@@ -1,6 +1,5 @@
-import { sql } from "./db";
+import { sql, type Db } from "./db";
 import { expiryOf, type ExpiryStatus } from "./fuel-expiry";
-import type { Db } from "./training-segments";
 
 export type ConsumablePatch = {
   kind?: string;

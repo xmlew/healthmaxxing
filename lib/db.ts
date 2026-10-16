@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import postgres, { type Sql, type TransactionSql } from "postgres";
 
 declare global {
   var __healthMaxxingSql: ReturnType<typeof postgres> | undefined;
@@ -17,3 +17,6 @@ export const sql = globalThis.__healthMaxxingSql ?? createClient();
 if (process.env.NODE_ENV !== "production") {
   globalThis.__healthMaxxingSql = sql;
 }
+
+// A query target: the pool, or a transaction a caller has already opened.
+export type Db = Sql | TransactionSql;

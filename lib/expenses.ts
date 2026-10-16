@@ -1,6 +1,5 @@
-import { sql } from "./db";
+import { sql, type Db } from "./db";
 import { addStockEvent } from "./fuel";
-import type { Db } from "./training-segments";
 
 export const BASE_CURRENCY = "USD";
 
