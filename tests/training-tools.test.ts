@@ -930,3 +930,15 @@ test("a workout naming several sports is not guessed into one", async () => {
   await ingest([{ id: `${TAG}multi`, name: "Swim Bike Run", start: "2020-08-04 08:00:00 -0700", duration: 3600 }]);
   assert.equal((await sessionsOn("2020-08-04")).length, 0);
 });
+
+test("re-applying a race format keeps course distances already set", async () => {
+  const race = `${TAG}course race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(dayKeyInZone(new Date()), 90), swim_km: 1.9 });
+  const updated = await callTool<{ race: { swimKm: number; bikeKm: number } }>("set_race", {
+    name: race,
+    format: "70.3",
+    notes: "course map pending",
+  });
+  assert.equal(updated.race.swimKm, 1.9, "the measured course swim is kept");
+  assert.equal(updated.race.bikeKm, 90.12, "a missing distance is filled");
+});

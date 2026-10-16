@@ -1884,7 +1884,7 @@ const handler = createMcpHandler(
       {
         title: "Add or update a race",
         description:
-          "Create or update a race by `name` (case-insensitive): date, location, course distances in km, goal, budget in USD, notes. `format: \"70.3\"` fills any distance not given with the nominal 1.2 mi / 56 mi / 13.1 mi (1.93 / 90.12 / 21.08 km); give the course's actual distances when they differ. A new race needs `race_date`. `checklist: \"70.3\"` adds a generic starting gear checklist and logistics tasks (no deadlines, no race-rule claims) for you to edit - it only adds what the race does not already have. Fields left out keep their value; null clears an optional one. The next upcoming race is the default wherever a race is not named.",
+          "Create or update a race by `name` (case-insensitive): date, location, course distances in km, goal, budget in USD, notes. `format: \"70.3\"` fills any distance not given and not already set with the nominal 1.2 mi / 56 mi / 13.1 mi (1.93 / 90.12 / 21.08 km); give the course's actual distances when they differ. A new race needs `race_date`. `checklist: \"70.3\"` adds a generic starting gear checklist and logistics tasks (no deadlines, no race-rule claims) for you to edit - it only adds what the race does not already have. Fields left out keep their value; null clears an optional one. The next upcoming race is the default wherever a race is not named.",
         inputSchema: {
           name: z.string().min(1),
           race_date: z.string().date().optional(),
@@ -1901,12 +1901,17 @@ const handler = createMcpHandler(
       },
       async ({ name, race_date, format, location, swim_km, bike_km, run_km, goal, budget_usd, notes, checklist }) => {
         const nominal = format ? RACE_FORMATS[format] : undefined;
+        // The nominal format never overwrites a distance already on file: that
+        // one was set deliberately, often from the actual course.
+        const existing = await findRace(dayKeyInZone(new Date()), name);
+        const distance = (given: number | null | undefined, stored: number | null | undefined, fallback?: number) =>
+          given !== undefined ? given : stored == null ? fallback : undefined;
         const result = await setRace(name.trim(), {
           raceDate: race_date,
           location,
-          swimKm: swim_km !== undefined ? swim_km : nominal?.swimKm,
-          bikeKm: bike_km !== undefined ? bike_km : nominal?.bikeKm,
-          runKm: run_km !== undefined ? run_km : nominal?.runKm,
+          swimKm: distance(swim_km, existing?.swimKm, nominal?.swimKm),
+          bikeKm: distance(bike_km, existing?.bikeKm, nominal?.bikeKm),
+          runKm: distance(run_km, existing?.runKm, nominal?.runKm),
           goal,
           budgetUsd: budget_usd,
           notes,
