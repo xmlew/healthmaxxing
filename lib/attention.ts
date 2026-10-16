@@ -15,7 +15,8 @@ export const SEVERITIES = ["blocker", "warning", "info"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
 export type AttentionItem = {
-  // Stable for as long as the situation is unchanged; used to dismiss or snooze.
+  // Stable for as long as the situation is unchanged - it embeds the state or
+  // figure the item reports - so a dismissal lapses once that changes.
   key: string;
   severity: Severity;
   area: "maintenance" | "fuel" | "race gear" | "race task" | "budget" | "training";
@@ -42,7 +43,7 @@ async function fuelItems(today: string): Promise<AttentionItem[]> {
   for (const c of await listConsumables(today)) {
     if (c.onHand < 0) {
       items.push({
-        key: `fuel-negative:${c.id}`,
+        key: `fuel-negative:${c.id}:${servings(c.onHand)}`,
         severity: "warning",
         area: "fuel",
         reason: `${c.name}: more logged as used than ever stocked (${servings(c.onHand)} on hand).`,
@@ -50,7 +51,7 @@ async function fuelItems(today: string): Promise<AttentionItem[]> {
       });
     } else if (c.shortfall > 0) {
       items.push({
-        key: `fuel-shortfall:${c.id}`,
+        key: `fuel-shortfall:${c.id}:${servings(c.shortfall)}`,
         severity: "warning",
         area: "fuel",
         reason: `${c.name}: ${servings(c.plannedNeed + c.raceNeed)} ${c.servingUnit}(s) planned (sessions ${servings(c.plannedNeed)}, races ${servings(c.raceNeed)}) but ${servings(c.onHand)} on hand.`,
@@ -67,7 +68,7 @@ async function fuelItems(today: string): Promise<AttentionItem[]> {
     }
     if (c.expiry.expiredServings > 0) {
       items.push({
-        key: `fuel-expired:${c.id}`,
+        key: `fuel-expired:${c.id}:${servings(c.expiry.expiredServings)}`,
         severity: "warning",
         area: "fuel",
         reason: `${c.name}: about ${servings(c.expiry.expiredServings)} serving(s) past expiry, assuming the oldest were used first.`,
@@ -125,7 +126,7 @@ async function raceItems(today: string): Promise<AttentionItem[]> {
     }
     if (budget.remainingAfterCommittedUsd != null && budget.remainingAfterCommittedUsd < 0) {
       items.push({
-        key: `budget-over:${race.id}`,
+        key: `budget-over:${race.id}:${Math.round(-budget.remainingAfterCommittedUsd)}`,
         severity: "warning",
         area: "budget",
         reason: `${race.name}: paid and committed spend is $${-budget.remainingAfterCommittedUsd} over the $${budget.budgetUsd} budget.`,

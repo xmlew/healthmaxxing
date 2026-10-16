@@ -2136,7 +2136,7 @@ const handler = createMcpHandler(
       {
         title: "Dismiss or snooze an attention item",
         description:
-          "Hide a needs-attention item by its `key`: until it changes (no date), or snoozed until `snooze_until` (YYYY-MM-DD). Keys carry the item's state, so a dismissed warning comes back if it gets worse or a new cycle starts. `undo: true` shows it again. Dismissing hides the reminder; it does not resolve the underlying issue.",
+          "Hide a needs-attention item by its `key`: until it changes (no date), or snoozed until `snooze_until` (YYYY-MM-DD). Keys carry the item's state and figures, so a dismissed item comes back when they change (a shortfall grows, approaching becomes due) or a new maintenance cycle starts. `undo: true` shows it again. Dismissing hides the reminder; it does not resolve the underlying issue.",
         inputSchema: {
           key: z.string().min(1),
           snooze_until: z.string().date().optional(),

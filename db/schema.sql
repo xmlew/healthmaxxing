@@ -523,8 +523,9 @@ create table if not exists race_fuel (
 
 -- The "needs attention" feed is computed, so only the athlete's choice to hide
 -- an item is stored: dismissed (until is null) or snoozed until a date. Keys
--- carry the item's state, so a dismissed "approaching" does not hide a later
--- "due", and a new maintenance cycle starts fresh.
+-- carry the item's state and figures, so a dismissed "approaching" does not
+-- hide a later "due", a grown shortfall shows again, and a new maintenance
+-- cycle starts fresh.
 create table if not exists attention_dismissals (
   key text primary key,
   until date,

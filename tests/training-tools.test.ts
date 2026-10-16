@@ -977,3 +977,18 @@ test("a booking's expense cannot be moved off its race", async () => {
   const detach = await callToolError("update_expense", { id: expense.id, race: null });
   assert.match(detach, /Hotel/, "detaching names the task holding it");
 });
+
+test("a dismissed fuel shortfall comes back when it grows", async () => {
+  const race = `${TAG}shortfall race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(dayKeyInZone(new Date()), 96) });
+  const bars = `${TAG}bars`;
+  await callTool("set_consumable", { name: bars, kind: "bar" });
+  await callTool("set_race_fuel", { race, product: bars, servings: 2 });
+  const shortfall = () =>
+    callTool<Attention>("get_needs_attention").then((a) => a.items.filter((i) => i.reason.startsWith(`${bars}:`)));
+  const [first] = await shortfall();
+  await callTool("dismiss_attention", { key: first.key });
+  assert.equal((await shortfall()).length, 0);
+  await callTool("set_race_fuel", { race, product: bars, servings: 6 });
+  assert.equal((await shortfall()).length, 1, "a bigger shortfall is a new item");
+});
