@@ -479,3 +479,55 @@ export async function setRaceFuel(raceId: number, consumableId: number, servings
     on conflict (race_id, consumable_id) do update set servings = excluded.servings
   `;
 }
+
+// A generic starting checklist for a 70.3, to be reviewed and edited: it names
+// common needs only, sets no deadlines, and claims nothing about any race's
+// rules - check the athlete guide for those.
+export const CHECKLIST_TEMPLATES = {
+  "70.3": {
+    gear: [
+      "wetsuit",
+      "goggles",
+      "swim cap",
+      "tri suit",
+      "bike",
+      "helmet",
+      "bike shoes",
+      "flat kit",
+      "bottles",
+      "run shoes",
+      "race belt",
+      "sunglasses",
+    ],
+    tasks: [
+      { title: "Register", category: "registration" },
+      { title: "Book lodging", category: "lodging" },
+      { title: "Book travel", category: "travel" },
+      { title: "Arrange bike transport", category: "bike_transport" },
+      { title: "Read the athlete guide", category: "other" },
+      { title: "Athlete check-in", category: "checkin" },
+      { title: "Bike check-in", category: "checkin" },
+      { title: "Pack transition bags", category: "checkin" },
+    ],
+  },
+} as const;
+export type ChecklistTemplate = keyof typeof CHECKLIST_TEMPLATES;
+
+// Adds whatever of the template the race does not have yet; existing
+// requirements and tasks, and any edits to them, are left alone.
+export async function applyChecklist(raceId: number, template: ChecklistTemplate): Promise<{ added: number }> {
+  const { gear, tasks } = CHECKLIST_TEMPLATES[template];
+  return sql.begin(async (tx) => {
+    const addedGear = await tx`
+      insert into race_gear ${tx(gear.map((label) => ({ race_id: raceId, label })))}
+      on conflict (race_id, lower(label)) do nothing
+      returning id
+    `;
+    const addedTasks = await tx`
+      insert into race_tasks ${tx(tasks.map((t) => ({ race_id: raceId, title: t.title, category: t.category })))}
+      on conflict (race_id, lower(title)) do nothing
+      returning id
+    `;
+    return { added: addedGear.length + addedTasks.length };
+  });
+}

@@ -844,3 +844,22 @@ test("the needs-attention feed surfaces blockers once, with reasons, and honours
   await callTool("log_service", { equipment: trainer, rule: "tyre check", date: "2020-07-04" });
   assert.equal(mine(await feed(), `${trainer}: tyre check`).length, 0, "the service resolves it");
 });
+
+test("a 70.3 checklist seeds gear and tasks once, without touching edits", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}template race`;
+  const first = await callTool<{ checklistItemsAdded: number }>("set_race", {
+    name: race,
+    race_date: shiftDayKey(today, 250),
+    checklist: "70.3",
+  });
+  assert.equal(first.checklistItemsAdded, 20, "12 gear requirements and 8 tasks");
+
+  await callTool("set_race_task", { race, title: "Register", due_on: shiftDayKey(today, 30) });
+  const again = await callTool<{ checklistItemsAdded: number }>("set_race", { name: race, checklist: "70.3" });
+  assert.equal(again.checklistItemsAdded, 0, "re-applying adds nothing");
+
+  const status = await callTool<{ gear: GearItem[]; tasks: Task[] }>("get_race_status", { race });
+  assert.ok(status.gear.every((g) => g.state === "missing"), "seeded gear starts missing, never ready");
+  assert.equal(status.tasks.find((t) => t.title === "Register")?.daysUntilDue, 30, "the edit survives");
+});
