@@ -1,7 +1,7 @@
 import { sql } from "./db";
 import { listExpenses, summarizeBudget, type BudgetSummary } from "./expenses";
 import { SPORTS, type Sport } from "./sports";
-import { shiftDayKey } from "./time";
+import { daysBetween, shiftDayKey } from "./time";
 
 const KM_PER_MILE = 1.609344;
 
@@ -290,6 +290,129 @@ export async function setRaceGear(
 export async function removeRaceGear(raceId: number, label: string): Promise<boolean> {
   const rows = await sql`
     delete from race_gear where race_id = ${raceId} and lower(label) = lower(${label}) returning id
+  `;
+  return rows.length > 0;
+}
+
+// Far enough ahead to act on a booking before it becomes a scramble.
+export const TASK_DUE_SOON_DAYS = 14;
+
+export type TaskState = "done" | "overdue" | "due_soon" | "open";
+
+export type RaceTask = {
+  id: number;
+  title: string;
+  category: string;
+  dueOn: string | null;
+  doneOn: string | null;
+  state: TaskState;
+  daysUntilDue: number | null;
+  confirmation: string | null;
+  expense: { id: number; description: string; amount: number; currency: string; status: string } | null;
+  notes: string | null;
+};
+
+export async function listRaceTasks(raceId: number, today: string): Promise<RaceTask[]> {
+  const rows = await sql`
+    select
+      t.id, t.title, t.category, to_char(t.due_on, 'YYYY-MM-DD') as due_on,
+      to_char(t.done_on, 'YYYY-MM-DD') as done_on, t.confirmation, t.notes,
+      x.id as expense_id, x.description as expense_description, x.amount, x.currency, x.status
+    from race_tasks t
+    left join expenses x on x.id = t.expense_id and x.deleted_at is null
+    where t.race_id = ${raceId}
+    order by t.done_on is not null, t.due_on nulls last, t.title
+  `;
+  return rows.map((r) => {
+    const dueOn = (r.due_on as string | null) ?? null;
+    const doneOn = (r.done_on as string | null) ?? null;
+    const daysUntilDue = dueOn ? daysBetween(today, dueOn) : null;
+    const state: TaskState = doneOn
+      ? "done"
+      : daysUntilDue == null
+        ? "open"
+        : daysUntilDue < 0
+          ? "overdue"
+          : daysUntilDue <= TASK_DUE_SOON_DAYS
+            ? "due_soon"
+            : "open";
+    return {
+      id: Number(r.id),
+      title: r.title as string,
+      category: r.category as string,
+      dueOn,
+      doneOn,
+      state,
+      daysUntilDue,
+      confirmation: (r.confirmation as string | null) ?? null,
+      expense:
+        r.expense_id == null
+          ? null
+          : {
+              id: Number(r.expense_id),
+              description: r.expense_description as string,
+              amount: Number(r.amount),
+              currency: r.currency as string,
+              status: r.status as string,
+            },
+      notes: (r.notes as string | null) ?? null,
+    };
+  });
+}
+
+// Upserts a task by title. Linking an expense attributes it to this race in the
+// same transaction, so a booking's cost cannot sit outside the race budget; an
+// expense already attributed to another race is refused rather than moved.
+export async function setRaceTask(
+  raceId: number,
+  title: string,
+  patch: {
+    category?: string;
+    dueOn?: string | null;
+    doneOn?: string | null;
+    confirmation?: string | null;
+    expenseId?: number | null;
+    notes?: string | null;
+  },
+): Promise<{ error: string } | null> {
+  return sql.begin(async (tx) => {
+    if (patch.expenseId != null) {
+      const [expense] = await tx`
+        select race_id from expenses where id = ${patch.expenseId} and deleted_at is null for update
+      `;
+      if (!expense) return { error: `No expense with id ${patch.expenseId}.` };
+      if (expense.race_id != null && Number(expense.race_id) !== raceId) {
+        return { error: `Expense ${patch.expenseId} is attributed to another race.` };
+      }
+      await tx`update expenses set race_id = ${raceId}, updated_at = now() where id = ${patch.expenseId}`;
+    }
+    const keep = (value: unknown, column: string) =>
+      value === undefined ? tx(column) : tx`${value as string | number | null}`;
+    const keepDate = (value: string | null | undefined, column: string) =>
+      value === undefined ? tx(column) : tx`${value}::date`;
+    await tx`
+      insert into race_tasks (race_id, title, category, due_on, done_on, confirmation, expense_id, notes)
+      values (
+        ${raceId}, ${title}, ${patch.category?.toLowerCase() ?? "other"}, ${patch.dueOn ?? null}::date,
+        ${patch.doneOn ?? null}::date, ${patch.confirmation ?? null}, ${patch.expenseId ?? null},
+        ${patch.notes ?? null}
+      )
+      on conflict (race_id, lower(title)) do update set
+        category = ${patch.category === undefined ? tx`race_tasks.category` : patch.category.toLowerCase()},
+        due_on = ${keepDate(patch.dueOn, "race_tasks.due_on")},
+        done_on = ${keepDate(patch.doneOn, "race_tasks.done_on")},
+        confirmation = ${keep(patch.confirmation, "race_tasks.confirmation")},
+        expense_id = ${keep(patch.expenseId, "race_tasks.expense_id")},
+        notes = ${keep(patch.notes, "race_tasks.notes")},
+        updated_at = now()
+    `;
+    return null;
+  });
+}
+
+export async function removeRaceTask(raceId: number, title: string): Promise<boolean> {
+  const rows = await sql`
+    delete from race_tasks where race_id = ${raceId} and lower(title) = lower(${title}) returning id
   `;
   return rows.length > 0;
 }

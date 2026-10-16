@@ -673,3 +673,52 @@ test("a race checklist shows missing, acquired, tested, and ready gear from one 
   await callTool("set_race_gear", { race, label: "wetsuit", equipment: spare });
   assert.equal((await gear()).wetsuit.state, "acquired", "a different item needs its own confirmation");
 });
+
+type Task = { title: string; state: string; daysUntilDue: number | null; confirmation: string | null; expense: { id: number } | null };
+
+test("race deadlines flag overdue and due-soon bookings, and a booking's cost joins the race budget", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}logistics race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(today, 200), budget_usd: 2000 });
+
+  await callTool("set_race_task", { race, title: "Register", category: "registration", due_on: shiftDayKey(today, -1) });
+  await callTool("set_race_task", { race, title: "Book lodging", category: "lodging", due_on: shiftDayKey(today, 10) });
+  await callTool("set_race_task", { race, title: "Ship bike", category: "bike_transport", due_on: shiftDayKey(today, 60) });
+  await callTool("set_race_task", { race, title: "Pack transition bags", category: "checkin" });
+
+  const tasks = async () => {
+    const status = await callTool<{ tasks: Task[]; budget: { paidUsd: number } }>("get_race_status", { race });
+    return { byTitle: Object.fromEntries(status.tasks.map((t) => [t.title, t])), budget: status.budget };
+  };
+  let { byTitle } = await tasks();
+  assert.equal(byTitle.Register.state, "overdue");
+  assert.equal(byTitle["Book lodging"].state, "due_soon");
+  assert.equal(byTitle["Ship bike"].state, "open");
+  assert.equal(byTitle["Pack transition bags"].state, "open", "no deadline, never overdue");
+
+  const { expense } = await callTool<{ expense: { id: number } }>("log_expense", {
+    description: `${TAG}motel`,
+    amount: 450,
+    category: "travel",
+  });
+  await callTool("set_race_task", {
+    race,
+    title: "book LODGING",
+    done: true,
+    confirmation: "HX-2231",
+    expense_id: expense.id,
+  });
+  const after = await tasks();
+  byTitle = after.byTitle;
+  assert.equal(byTitle["Book lodging"].state, "done", "titles match case-insensitively");
+  assert.equal(byTitle["Book lodging"].confirmation, "HX-2231");
+  assert.equal(after.budget.paidUsd, 450, "linking the booking's expense attributes it to the race");
+
+  await callTool("set_race", { name: `${TAG}other race`, race_date: shiftDayKey(today, 300) });
+  const refused = await callToolError("set_race_task", {
+    race: `${TAG}other race`,
+    title: "Hotel",
+    expense_id: expense.id,
+  });
+  assert.match(refused, /another race/);
+});

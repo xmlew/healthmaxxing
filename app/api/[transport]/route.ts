@@ -108,8 +108,11 @@ import {
   findRace,
   listRaceGear,
   listRaces,
+  listRaceTasks,
   removeRaceGear,
+  removeRaceTask,
   setRaceGear,
+  setRaceTask,
   raceBudget,
   RACE_FORMATS,
   setRace,
@@ -1899,7 +1902,7 @@ const handler = createMcpHandler(
       {
         title: "Race status",
         description:
-          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, the gear checklist with each requirement's state (missing / acquired / tested / ready) and the evidence it rests on, and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
+          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, the gear checklist with each requirement's state (missing / acquired / tested / ready) and the evidence it rests on, deadlines and bookings with their state (overdue / due_soon within 14 days / open / done), and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
         inputSchema: { race: z.string().min(1).optional() },
       },
       async ({ race: name }) => {
@@ -1910,11 +1913,12 @@ const handler = createMcpHandler(
             ? fail(`No race named "${name}".`)
             : ok({ race: null, message: "No race set yet. Add one with set_race." });
         }
-        const [milestones, budget, races, gear] = await Promise.all([
+        const [milestones, budget, races, gear, tasks] = await Promise.all([
           sportMilestones(race, today),
           raceBudget(race),
           listRaces(),
           listRaceGear(race.id),
+          listRaceTasks(race.id, today),
         ]);
         return ok({
           race: presentRace(race),
@@ -1927,6 +1931,7 @@ const handler = createMcpHandler(
             weeklyHoursRecent: Math.round(m.weeklyHoursRecent * 10) / 10,
           })),
           gear,
+          tasks,
           budget,
           races: races.map((r) => ({ name: r.name, raceDate: r.raceDate })),
         });
@@ -1988,6 +1993,64 @@ const handler = createMcpHandler(
         if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
         const removed = await removeRaceGear(race.id, label.trim());
         return removed ? ok({ ok: true, race: race.name, removed: label }) : fail(`No "${label}" on ${race.name}.`);
+      }
+    );
+
+    server.registerTool(
+      "set_race_task",
+      {
+        title: "Set a race deadline or booking",
+        description:
+          "Add or update a logistics task for a race by `title`: registration, lodging, travel, bike transport, athlete check-in, anything with a deadline. `due_on` is the deadline; `done: true` marks it done today (or on `done_on`), false reopens it. Keep booking references in `confirmation`. `expense_id` (from log_expense) links what the booking cost and attributes that expense to this race's budget. Fields left out keep their value; null clears one. Race defaults to the next upcoming one.",
+        inputSchema: {
+          title: z.string().min(1),
+          race: z.string().min(1).optional(),
+          category: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("registration, lodging, travel, bike_transport, checkin, or other."),
+          due_on: z.string().date().nullable().optional(),
+          done: z.boolean().optional(),
+          done_on: z.string().date().optional(),
+          confirmation: z.string().nullable().optional(),
+          expense_id: z.number().int().positive().nullable().optional(),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ title, race: raceName, category, due_on, done, done_on, confirmation, expense_id, notes }) => {
+        const today = dayKeyInZone(new Date());
+        const race = await findRace(today, raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        if (done === false && done_on) return fail("done_on cannot be given with done: false.");
+        const refused = await setRaceTask(race.id, title.trim(), {
+          category,
+          dueOn: due_on,
+          doneOn: done === false ? null : done || done_on ? (done_on ?? today) : undefined,
+          confirmation,
+          expenseId: expense_id,
+          notes,
+        });
+        if (refused) return fail(refused.error);
+        const task = (await listRaceTasks(race.id, today)).find(
+          (t) => t.title.toLowerCase() === title.trim().toLowerCase(),
+        );
+        return ok({ ok: true, race: race.name, task });
+      }
+    );
+
+    server.registerTool(
+      "remove_race_task",
+      {
+        title: "Remove a race task",
+        description: "Drop a logistics task from a race by `title`. A linked expense is kept.",
+        inputSchema: { title: z.string().min(1), race: z.string().min(1).optional() },
+      },
+      async ({ title, race: raceName }) => {
+        const race = await findRace(dayKeyInZone(new Date()), raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const removed = await removeRaceTask(race.id, title.trim());
+        return removed ? ok({ ok: true, race: race.name, removed: title }) : fail(`No "${title}" on ${race.name}.`);
       }
     );
   },

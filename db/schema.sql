@@ -490,6 +490,26 @@ create table if not exists race_gear (
 
 create unique index if not exists race_gear_race_label_key on race_gear (race_id, lower(label));
 
+-- Race logistics: deadlines and bookings (registration, lodging, travel, bike
+-- transport, check-in). Overdue and due-soon are computed from due_on against
+-- today. A booking's cost is the expense it links to, which is attributed to
+-- the same race so it counts in that race's budget.
+create table if not exists race_tasks (
+  id bigserial primary key,
+  race_id bigint not null references races (id) on delete cascade,
+  title text not null,
+  category text not null default 'other',
+  due_on date,
+  done_on date,
+  confirmation text,
+  expense_id bigint references expenses (id) on delete set null,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists race_tasks_race_title_key on race_tasks (race_id, lower(title));
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,
