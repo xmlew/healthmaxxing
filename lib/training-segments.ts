@@ -11,7 +11,9 @@ export type SegmentInput = {
 };
 
 // Takes its connection rather than importing lib/db, so a caller can write a
-// session's segments inside the transaction that writes the session.
+// session's segments inside the transaction that writes the session, and so
+// ingest (which the import script loads before configuring the environment)
+// can write them too.
 export async function insertSegments(db: Db, sessionId: number, segments: SegmentInput[]): Promise<void> {
   for (const [index, segment] of segments.entries()) {
     const [row] = await db`

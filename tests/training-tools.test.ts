@@ -10,9 +10,10 @@ selectTestDatabase();
 const PORT = 3132;
 const BASE = `http://localhost:${PORT}`;
 const SECRET = process.env.MCP_SECRET;
+const INGEST_SECRET = process.env.INGEST_SECRET;
 
-// Every row this suite writes carries this prefix in a name or note, so cleanup
-// matches exactly what the suite created.
+// Every row this suite writes carries this prefix in a name, note, or workout
+// id, so cleanup matches exactly what the suite created.
 const TAG = "__training_test__";
 const BIKE = `${TAG}bike`;
 const SHOES = `${TAG}shoes`;
@@ -28,6 +29,7 @@ type Session = {
   date: string;
   status: string;
   kind: string;
+  source: string;
   totalDistanceKm: number | null;
   totalDurationMin: number | null;
   segments: Segment[];
@@ -37,8 +39,12 @@ type LoggedSession = { session: Session; equipment: { name: string; usage: Usage
 async function removeTestRows(): Promise<void> {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
   try {
-    await sql`delete from training_sessions where notes like ${`${TAG}%`}`;
+    await sql`
+      delete from training_sessions
+      where notes like ${`${TAG}%`} or workout_id like ${`${TAG}%`}
+    `;
     await sql`delete from equipment where name like ${`${TAG}%`}`;
+    await sql`delete from workouts where id like ${`${TAG}%`}`;
   } finally {
     await sql.end();
   }
@@ -60,8 +66,18 @@ async function sessionsOn(date: string, includeDeleted = false): Promise<Session
   return sessions;
 }
 
+async function ingest(workouts: Record<string, unknown>[]): Promise<void> {
+  const res = await fetch(`${BASE}/api/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${INGEST_SECRET}` },
+    body: JSON.stringify({ data: { workouts } }),
+  });
+  assert.equal(res.status, 200, `ingest failed: ${await res.text()}`);
+}
+
 before(async () => {
   assert.ok(SECRET, "MCP_SECRET must be set in .env.local for the test");
+  assert.ok(INGEST_SECRET, "INGEST_SECRET must be set in .env.local for the test");
   await removeTestRows();
   server = await startTestServer(PORT);
   await callTool("set_equipment", { name: BIKE, category: "bike" });
@@ -83,6 +99,7 @@ test("a completed ride adds exactly its distance to the bike, and edits replace 
     notes: TAG,
   });
   assert.equal(logged.session.kind, "bike");
+  assert.equal(logged.session.source, "manual");
   assert.equal(logged.equipment[0].usage.distanceKm, before.distanceKm + 60, "the ride adds 60 km");
 
   const edit = {
@@ -182,4 +199,88 @@ test("invalid sessions are refused without writing anything", async () => {
     assert.match(error, message);
   }
   assert.equal((await sessionsOn(date, true)).length, 0, "no refused call left a session behind");
+});
+
+test("Apple Health swims, rides, and runs become sessions without duplicating logged ones", async () => {
+  // A ride with nothing logged that day becomes its own imported session, once.
+  const ride = {
+    id: `${TAG}ride`,
+    name: "Outdoor Cycling",
+    start: "2020-03-10 07:00:00 -0700",
+    end: "2020-03-10 09:00:00 -0700",
+    duration: 7200,
+    distance: { qty: 55.5, units: "km" },
+  };
+  await ingest([ride]);
+  await ingest([ride]);
+  const rides = await sessionsOn("2020-03-10");
+  assert.equal(rides.length, 1, "re-ingesting the same workout does not duplicate it");
+  assert.equal(rides[0].source, "imported");
+  assert.equal(rides[0].status, "completed");
+  assert.equal(rides[0].segments[0].durationMin, 120);
+  assert.equal(rides[0].segments[0].distanceKm, 55.5);
+
+  // A planned run is completed by the watch, with the measured values.
+  await callTool("log_training_session", {
+    date: "2020-03-11",
+    status: "planned",
+    segments: [{ sport: "run", duration_min: 60, distance_km: 10 }],
+    notes: TAG,
+  });
+  await ingest([
+    {
+      id: `${TAG}run`,
+      name: "Outdoor Run",
+      start: "2020-03-11 18:00:00 -0700",
+      duration: 3000,
+      distance: { qty: 6.2, units: "mi" },
+    },
+  ]);
+  const runs = await sessionsOn("2020-03-11");
+  assert.equal(runs.length, 1, "the run attached to the planned session");
+  assert.equal(runs[0].status, "completed");
+  assert.equal(runs[0].source, "imported");
+  assert.equal(runs[0].segments[0].durationMin, 50);
+  assert.equal(runs[0].segments[0].distanceKm, 9.98, "miles are converted to km");
+
+  // A swim already logged by hand keeps what was entered and gains the link.
+  await callTool("log_training_session", {
+    date: "2020-03-12",
+    segments: [{ sport: "swim", duration_min: 30, distance_m: 1500 }],
+    notes: TAG,
+  });
+  await ingest([
+    {
+      id: `${TAG}swim`,
+      name: "Pool Swim",
+      start: "2020-03-12 06:30:00 -0700",
+      duration: 1920,
+      distance: { qty: 1600, units: "m" },
+    },
+  ]);
+  const swims = await sessionsOn("2020-03-12");
+  assert.equal(swims.length, 1, "the swim attached to the logged session");
+  assert.equal(swims[0].source, "imported");
+  assert.equal(swims[0].segments[0].distanceM, 1500, "asserted values outrank the watch");
+
+  // Unknown distance units are dropped rather than guessed; walks are not sessions.
+  await ingest([
+    {
+      id: `${TAG}odd-unit`,
+      name: "Indoor Cycling",
+      start: "2020-03-13 07:00:00 -0700",
+      duration: 1800,
+      distance: { qty: 12, units: "furlong" },
+    },
+    {
+      id: `${TAG}walk`,
+      name: "Outdoor Walk",
+      start: "2020-03-13 12:00:00 -0700",
+      duration: 1800,
+      distance: { qty: 3, units: "km" },
+    },
+  ]);
+  const day = await sessionsOn("2020-03-13");
+  assert.equal(day.length, 1, "only the ride became a session");
+  assert.equal(day[0].segments[0].distanceKm, null);
 });

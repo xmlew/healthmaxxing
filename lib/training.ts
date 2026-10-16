@@ -17,6 +17,8 @@ export type TrainingSession = {
   date: string;
   status: SessionStatus;
   kind: SessionKind;
+  source: "manual" | "imported";
+  workoutId: string | null;
   rpe: number | null;
   notes: string | null;
   totalDurationMin: number | null;
@@ -113,7 +115,7 @@ export async function listTrainingSessions(filter: {
   includeDeleted?: boolean;
 }): Promise<TrainingSession[]> {
   const sessions = await sql`
-    select id, session_date, status, rpe, notes, deleted_at
+    select id, session_date, status, rpe, notes, workout_id, deleted_at
     from training_sessions
     where true
       ${filter.from ? sql`and session_date >= ${filter.from}::date` : sql``}
@@ -165,6 +167,8 @@ export async function listTrainingSessions(filter: {
       date: toDateStr(s.session_date),
       status: s.status as SessionStatus,
       kind: sessionKind(segs),
+      source: s.workout_id ? "imported" : "manual",
+      workoutId: (s.workout_id as string | null) ?? null,
       rpe: s.rpe == null ? null : Number(s.rpe),
       notes: (s.notes as string | null) ?? null,
       totalDurationMin: totalOf(segs, "durationMin"),

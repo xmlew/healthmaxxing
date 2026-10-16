@@ -1149,7 +1149,7 @@ const handler = createMcpHandler(
       {
         title: "Log a swim, ride, run, or brick",
         description:
-          "Record one endurance session, planned or completed. A single-sport session has one segment; a brick lists its legs in order (e.g. bike then run). Each segment takes the sport, duration_min (required when completed), distance in distance_km or distance_m (swims usually metres), and the equipment used on that leg by name - equipment must already exist and be in hand (see list_equipment / set_equipment). `date` is the calendar day (YYYY-MM-DD, America/Los_Angeles), defaulting to today. `possibleDuplicates` lists other sessions that day with a leg of the same sport - if one is the same effort, delete this one and use update_training_session on that instead. Returns the stored session and the updated usage of every linked item.",
+          "Record one endurance session, planned or completed. A single-sport session has one segment; a brick lists its legs in order (e.g. bike then run). Each segment takes the sport, duration_min (required when completed), distance in distance_km or distance_m (swims usually metres), and the equipment used on that leg by name - equipment must already exist and be in hand (see list_equipment / set_equipment). `date` is the calendar day (YYYY-MM-DD, America/Los_Angeles), defaulting to today. Apple Health swims, rides, and runs are imported automatically and attach to a same-day, same-sport session that has no workout yet, so check `possibleDuplicates` in the response and prefer update_training_session to add gear or notes to a session that already exists. Returns the stored session and the updated usage of every linked item.",
         inputSchema: {
           segments: z.array(segmentSchema).min(1),
           status: z.enum(SESSION_STATUSES).default("completed"),
@@ -1179,7 +1179,7 @@ const handler = createMcpHandler(
           equipment: await equipmentUsageFor(session),
           possibleDuplicates: sameDay
             .filter((s) => s.segments.some((seg) => sports.has(seg.sport)))
-            .map((s) => ({ id: s.id, kind: s.kind, status: s.status })),
+            .map((s) => ({ id: s.id, kind: s.kind, status: s.status, source: s.source })),
         });
       }
     );
@@ -1267,7 +1267,7 @@ const handler = createMcpHandler(
       {
         title: "List training sessions",
         description:
-          "Swim, bike, run, and brick sessions between `from` and `to` (YYYY-MM-DD, inclusive; default the last 28 days through 28 days ahead, so upcoming planned sessions are included), newest first. Each carries its `id`, status (planned/completed), kind, per-leg duration/distance/equipment, and totals. A total is null when any leg lacks that measure. Strength sessions are separate (get_exercise_history).",
+          "Swim, bike, run, and brick sessions between `from` and `to` (YYYY-MM-DD, inclusive; default the last 28 days through 28 days ahead, so upcoming planned sessions are included), newest first. Each carries its `id`, status (planned/completed), kind, source (manual, or imported from Apple Health), per-leg duration/distance/equipment, and totals. A total is null when any leg lacks that measure. Strength sessions are separate (get_exercise_history).",
         inputSchema: {
           from: z.string().date().optional(),
           to: z.string().date().optional(),

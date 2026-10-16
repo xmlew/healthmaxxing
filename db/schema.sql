@@ -256,6 +256,16 @@ create table if not exists training_sessions (
 create index if not exists training_sessions_date_idx
   on training_sessions (session_date desc);
 
+-- Set when the session came from an Apple Health workout; that link is the
+-- session's provenance (imported vs. manual). At most one session per workout,
+-- so re-ingesting an export never duplicates one (same pattern as
+-- strength_sessions_workout_id_key).
+alter table training_sessions add column if not exists workout_id text references workouts (id);
+
+create unique index if not exists training_sessions_workout_id_key
+  on training_sessions (workout_id)
+  where workout_id is not null;
+
 create table if not exists training_segments (
   id bigserial primary key,
   session_id bigint not null references training_sessions (id) on delete cascade,
