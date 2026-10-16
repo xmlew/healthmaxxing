@@ -1314,7 +1314,7 @@ const handler = createMcpHandler(
       {
         title: "Delete a training session",
         description:
-          "Move a session to the recycle bin by `id`. It stops counting toward equipment usage immediately and can be brought back with restore_training_session.",
+          "Move a session to the recycle bin by `id`. It stops counting toward equipment usage and returns its fuel to stock immediately, and can be brought back with restore_training_session.",
         inputSchema: { id: z.number().int().positive() },
       },
       async ({ id }) => {
