@@ -377,8 +377,9 @@ create table if not exists maintenance_rules (
   interval_days integer,
   interval_km double precision,
   interval_hours double precision,
-  -- Usage is counted from here until the first service is logged.
-  starts_on date not null default current_date,
+  -- Usage is counted from here until the first service is logged. No default:
+  -- current_date follows the server's zone, not the app's calendar day.
+  starts_on date not null,
   notes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),

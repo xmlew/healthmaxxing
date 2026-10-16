@@ -1600,15 +1600,15 @@ const handler = createMcpHandler(
       async ({ equipment, name, every_days, every_km, every_hours, starts_on, notes }) => {
         const equipmentId = await findEquipmentId(equipment);
         if (equipmentId == null) return fail(`No equipment named "${equipment}" (see list_equipment).`);
-        const result = await setMaintenanceRule(equipmentId, name, {
-          intervalDays: every_days,
-          intervalKm: every_km,
-          intervalHours: every_hours,
-          startsOn: starts_on,
-          notes,
-        });
+        const today = dayKeyInZone(new Date());
+        const result = await setMaintenanceRule(
+          equipmentId,
+          name,
+          { intervalDays: every_days, intervalKm: every_km, intervalHours: every_hours, startsOn: starts_on, notes },
+          today,
+        );
         if ("error" in result) return fail(result.error);
-        const rule = (await listMaintenance(dayKeyInZone(new Date()), { equipmentId })).find(
+        const rule = (await listMaintenance(today, { equipmentId })).find(
           (r) => r.id === result.id,
         );
         return ok({ ok: true, created: result.created, rule: rule ? presentRule(rule) : null });

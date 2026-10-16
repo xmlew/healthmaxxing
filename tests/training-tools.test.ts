@@ -994,3 +994,14 @@ test("a dismissed fuel shortfall comes back when it grows", async () => {
   await callTool("set_race_fuel", { race, product: bars, servings: 6 });
   assert.equal((await shortfall()).length, 1, "a bigger shortfall is a new item");
 });
+
+test("a maintenance rule with no start date starts on the Los Angeles day", async () => {
+  const pump = `${TAG}floor pump`;
+  await callTool("set_equipment", { name: pump, category: "tool" });
+  const { rule } = await callTool<{ rule: { startsOn: string } }>("set_maintenance_rule", {
+    equipment: pump,
+    name: "gauge check",
+    every_days: 180,
+  });
+  assert.equal(rule.startsOn, dayKeyInZone(new Date()));
+});

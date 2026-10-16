@@ -140,11 +140,14 @@ export async function findRuleId(equipmentId: number, name: string): Promise<num
 }
 
 // Upserts by (item, rule name). An interval left undefined keeps its value and
-// null clears it; the table refuses a rule left with no interval at all.
+// null clears it; the table refuses a rule left with no interval at all. A new
+// rule starts on `today` (the app's calendar day) unless told otherwise - not
+// the database's current_date, which follows the server's zone.
 export async function setMaintenanceRule(
   equipmentId: number,
   name: string,
   patch: RuleIntervals & { startsOn?: string; notes?: string | null },
+  today: string,
 ): Promise<{ id: number; created: boolean } | { error: string }> {
   const existingId = await findRuleId(equipmentId, name);
   try {
@@ -154,7 +157,7 @@ export async function setMaintenanceRule(
           (equipment_id, name, interval_days, interval_km, interval_hours, starts_on, notes)
         values (
           ${equipmentId}, ${name.trim()}, ${patch.intervalDays ?? null}, ${patch.intervalKm ?? null},
-          ${patch.intervalHours ?? null}, coalesce(${patch.startsOn ?? null}::date, current_date),
+          ${patch.intervalHours ?? null}, ${patch.startsOn ?? today}::date,
           ${patch.notes ?? null}
         )
         returning id
