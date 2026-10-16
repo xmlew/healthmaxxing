@@ -2018,7 +2018,7 @@ const handler = createMcpHandler(
           ok: true,
           race: race.name,
           requirement: item,
-          ...(item.state === "ready" && item.evidence.includes("never used")
+          ...(item.state === "ready" && item.usedInSessions === 0
             ? { warning: `Confirmed ready but ${item.equipment} has never been used in a logged session.` }
             : {}),
         });

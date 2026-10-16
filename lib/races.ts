@@ -197,6 +197,7 @@ export type RaceGearItem = {
   state: GearState;
   // What the state rests on, so it can be checked rather than trusted.
   evidence: string;
+  usedInSessions: number;
   readyOn: string | null;
   notes: string | null;
 };
@@ -244,7 +245,16 @@ export async function listRaceGear(raceId: number): Promise<RaceGearItem[]> {
       state = "acquired";
       evidence = `${equipment} is ${status}; ${usage}`;
     }
-    return { label: r.label as string, equipment, equipmentStatus: status, state, evidence, readyOn, notes: (r.notes as string | null) ?? null };
+    return {
+      label: r.label as string,
+      equipment,
+      equipmentStatus: status,
+      state,
+      evidence,
+      usedInSessions: sessions,
+      readyOn,
+      notes: (r.notes as string | null) ?? null,
+    };
   });
 }
 
