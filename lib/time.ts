@@ -37,3 +37,9 @@ export function formatDate(
     timeZone: isCalendarDate ? "UTC" : TIME_ZONE,
   }).format(new Date(value));
 }
+
+export function daysBetween(fromDayKey: string, toDayKey: string): number {
+  return Math.round(
+    (Date.parse(`${toDayKey}T00:00:00Z`) - Date.parse(`${fromDayKey}T00:00:00Z`)) / 86_400_000,
+  );
+}

@@ -1,4 +1,7 @@
 import type { Sql } from "postgres";
+import type { Db } from "./db";
+import type { Sport } from "./sports";
+import { insertSegments } from "./training-segments";
 import { TIME_ZONE } from "./time";
 
 // Apple Health's generic strength workout. Ingesting one links a strength_sessions
@@ -77,6 +80,102 @@ function numeric(value: WorkoutQty | number | undefined): number | null {
 // that trips up its structural check.
 function toJson(value: unknown) {
   return JSON.parse(JSON.stringify(value));
+}
+
+type ImportedWorkout = {
+  workoutId: string;
+  sessionDate: string;
+  sport: Sport;
+  durationMin: number | null;
+  distanceKm: number | null;
+};
+
+// Turns an Apple Health swim/ride/run into a completed session. A session already
+// logged for that day and sport without a workout link is taken to be the same
+// effort and is linked instead of duplicated, so a ride told to Claude and later
+// synced from the watch counts once. A planned session is completed with the
+// measured values; a session already logged as completed keeps what was entered,
+// because asserted data outranks inferred data. Idempotent per workout.
+async function linkImportedWorkout(sql: Db, workout: ImportedWorkout): Promise<void> {
+  const [alreadyLinked] = await sql`
+    select 1 from training_sessions where workout_id = ${workout.workoutId}
+  `;
+  if (alreadyLinked) return;
+
+  const [match] = await sql`
+    select ts.id, ts.status
+    from training_sessions ts
+    where ts.session_date = ${workout.sessionDate}::date
+      and ts.workout_id is null
+      and ts.deleted_at is null
+      and (select count(*) from training_segments seg where seg.session_id = ts.id) = 1
+      and exists (
+        select 1 from training_segments seg
+        where seg.session_id = ts.id and seg.sport = ${workout.sport}
+      )
+    order by (ts.status = 'planned'), ts.id
+    limit 1
+  `;
+
+  if (!match) {
+    const [row] = await sql`
+      insert into training_sessions (session_date, status, workout_id)
+      values (${workout.sessionDate}::date, 'completed', ${workout.workoutId})
+      on conflict (workout_id) where workout_id is not null do nothing
+      returning id
+    `;
+    if (!row) return;
+    await insertSegments(sql, Number(row.id), [
+      {
+        sport: workout.sport,
+        durationMin: workout.durationMin,
+        distanceKm: workout.distanceKm,
+        equipmentIds: [],
+      },
+    ]);
+    return;
+  }
+
+  await sql`
+    update training_sessions
+    set workout_id = ${workout.workoutId}, status = 'completed', updated_at = now()
+    where id = ${match.id}
+  `;
+  if (match.status === "planned") {
+    await sql`
+      update training_segments
+      set duration_min = coalesce(${workout.durationMin}, duration_min),
+          distance_km = coalesce(${workout.distanceKm}, distance_km)
+      where session_id = ${match.id}
+    `;
+  }
+}
+
+// Apple Health names a workout by activity and setting ("Outdoor Cycling",
+// "Pool Swim", "Indoor Run"), so the sport is the activity word. Walks, hikes,
+// and strength sessions match none and stay workouts only; a name matching
+// several sports is a multisport workout whose legs cannot be told apart, so it
+// stays a workout too rather than becoming one long leg of the first sport.
+const SPORT_PATTERNS: [RegExp, Sport][] = [
+  [/\bswim/i, "swim"],
+  [/\b(cycling|bike|biking)\b/i, "bike"],
+  [/\brun(ning)?\b/i, "run"],
+];
+
+function sportForWorkout(name: string | undefined): Sport | null {
+  if (!name) return null;
+  const matches = SPORT_PATTERNS.filter(([pattern]) => pattern.test(name));
+  return matches.length === 1 ? matches[0][1] : null;
+}
+
+const KM_PER_UNIT: Record<string, number> = { km: 1, m: 0.001, mi: 1.609344, yd: 0.0009144 };
+
+// Distance is converted by its declared unit. An unrecognized unit yields no
+// distance rather than a guess, since gear mileage is summed from this value.
+function distanceKm(value: WorkoutQty | undefined): number | null {
+  if (!value || typeof value.qty !== "number") return null;
+  const factor = value.units ? KM_PER_UNIT[value.units.toLowerCase()] : undefined;
+  return factor == null ? null : value.qty * factor;
 }
 
 export async function ingestMetrics(sql: Sql, metrics: MetricGroup[]): Promise<number> {
@@ -158,6 +257,25 @@ export async function ingestWorkouts(sql: Sql, workouts: WorkoutRecord[]): Promi
           select 1 from strength_sessions where workout_id = ${id}
         )
       `;
+    }
+
+    // A workout with no positive duration was aborted; it stays a workout only.
+    const sport = sportForWorkout(workout.name);
+    if (sport && workout.start && durationSeconds != null && durationSeconds > 0) {
+      const [row] = await sql`
+        select (${workout.start}::timestamptz at time zone ${TIME_ZONE})::date::text as day
+      `;
+      // One transaction, so a failure cannot leave a session without its leg -
+      // and an already-linked workout is never revisited to repair one.
+      await sql.begin((tx) =>
+        linkImportedWorkout(tx, {
+          workoutId: id,
+          sessionDate: row.day,
+          sport,
+          durationMin: durationSeconds / 60,
+          distanceKm: distanceKm(workout.distance),
+        }),
+      );
     }
 
     count++;

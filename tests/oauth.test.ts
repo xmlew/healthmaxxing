@@ -1,11 +1,11 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import dotenv from "dotenv";
+import { startTestServer, type TestServer } from "./support/server";
+import { selectTestDatabase } from "./support/test-db";
 import postgres from "postgres";
 
-dotenv.config({ path: ".env.local" });
+selectTestDatabase();
 
 // Separate port from mcp-tools.test.ts so both suites can spawn their own server;
 // node --test runs each test file in its own process.
@@ -17,21 +17,8 @@ const REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback";
 const b64url = (buf: Buffer) => buf.toString("base64url");
 const sha256 = (input: string) => createHash("sha256").update(input).digest();
 
-let server: ChildProcess;
+let server: TestServer | undefined;
 const createdClientIds: string[] = [];
-
-async function waitForServer(timeoutMs = 60_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      if ((await fetch(`${BASE}/`, { method: "GET" })).ok) return;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(`Server did not start on ${BASE} within ${timeoutMs}ms`);
-}
 
 function form(fields: Record<string, string>): URLSearchParams {
   return new URLSearchParams(fields);
@@ -99,15 +86,11 @@ async function mcpStatus(token: string): Promise<number> {
 
 before(async () => {
   assert.ok(SECRET, "MCP_SECRET must be set in .env.local for the test");
-  server = spawn("npx", ["next", "start", "-p", String(PORT)], {
-    stdio: "ignore",
-    env: process.env,
-  });
-  await waitForServer();
+  server = await startTestServer(PORT);
 });
 
 after(() => {
-  server?.kill("SIGTERM");
+  server?.stop();
 });
 
 // Remove only the clients this suite created; their codes and tokens cascade.
