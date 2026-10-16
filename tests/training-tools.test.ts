@@ -863,3 +863,56 @@ test("a 70.3 checklist seeds gear and tasks once, without touching edits", async
   assert.ok(status.gear.every((g) => g.state === "missing"), "seeded gear starts missing, never ready");
   assert.equal(status.tasks.find((t) => t.title === "Register")?.daysUntilDue, 30, "the edit survives");
 });
+
+test("PRD demo: one ride, one purchase, and every view updates without copying a value", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}demo 70.3`;
+  const bike = `${TAG}demo road bike`;
+  const suit = `${TAG}demo wetsuit`;
+  const gel = `${TAG}demo gel`;
+
+  await callTool("set_race", { name: race, race_date: shiftDayKey(today, 7), format: "70.3", budget_usd: 1500 });
+  await callTool("set_equipment", { name: bike, category: "bike" });
+  await callTool("set_equipment", { name: suit, category: "wetsuit", status: "needed" });
+  await callTool("set_race_gear", { race, label: "wetsuit", equipment: suit });
+  await callTool("set_consumable", { name: gel, kind: "gel", carbs_g: 22 });
+  await callTool("adjust_stock", { product: gel, servings: 6 });
+  await callTool("set_maintenance_rule", { equipment: bike, name: "chain inspection", every_km: 65, starts_on: shiftDayKey(today, -2) });
+
+  const ride = await callTool<LoggedSession>("log_training_session", {
+    date: shiftDayKey(today, -1),
+    segments: [{ sport: "bike", duration_min: 140, distance_km: 60, equipment: [bike] }],
+    fuel: [{ product: gel, servings: 2 }],
+    notes: TAG,
+  });
+  assert.equal(ride.equipment[0].usage.distanceKm, 60, "bike mileage +60");
+  assert.equal(ride.fuelStock[0].onHand, 4, "4 gels remain");
+
+  await callTool("log_expense", { description: `${TAG}demo wetsuit`, amount: 200, equipment: suit, race });
+  const status = await callTool<{ gear: GearItem[]; budget: { paidUsd: number } }>("get_race_status", { race });
+  assert.equal(status.gear.find((g) => g.label === "wetsuit")?.state, "acquired", "acquired, open-water test still needed");
+  assert.equal(status.budget.paidUsd, 200, "the purchase is in the race budget once");
+
+  const attention = await callTool<Attention>("get_needs_attention");
+  const demo = attention.items.filter((i) => i.reason.includes(`${TAG}demo`));
+  assert.deepEqual(
+    demo.map((i) => i.area).sort(),
+    ["maintenance", "race gear"],
+    "chain inspection approaching and wetsuit untested, in one feed",
+  );
+
+  await callTool("log_training_session", {
+    date: shiftDayKey(today, 1),
+    status: "planned",
+    segments: [{ sport: "swim", distance_m: 1900, equipment: [suit] }],
+    notes: TAG,
+  });
+  const summary = await callTool<{
+    nextSession: { date: string; kind: string } | null;
+    race: { name: string; daysToGo: number } | null;
+    needsAttention: { top: unknown[]; total: number };
+  }>("get_today_summary");
+  assert.deepEqual(summary.nextSession && [summary.nextSession.date, summary.nextSession.kind], [shiftDayKey(today, 1), "swim"]);
+  assert.deepEqual(summary.race && [summary.race.name, summary.race.daysToGo], [race, 7]);
+  assert.ok(summary.needsAttention.top.length <= 2 && summary.needsAttention.total >= 2);
+});

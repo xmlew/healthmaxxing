@@ -335,10 +335,11 @@ const handler = createMcpHandler(
       {
         title: "Today's summary",
         description:
-          "Today's health snapshot (dashboard home): steps, distance, sleep, resting heart rate, calories in vs. out, current weight, and goal progress. 'Today' is the America/Los_Angeles calendar day. Energy is in kcal.",
+          "Today's health snapshot (dashboard home): steps, distance, sleep, resting heart rate, calories in vs. out, current weight, and goal progress, plus training context - the next planned swim/bike/run session, days to the next race, and the two most pressing needs-attention items with the total count (get_needs_attention has the rest). 'Today' is the America/Los_Angeles calendar day. Energy is in kcal.",
       },
       async () => {
-        const [steps, activeKj, basalKj, distanceKm, restingHr, sleep, food, weight, goal] =
+        const today = dayKeyInZone(new Date());
+        const [steps, activeKj, basalKj, distanceKm, restingHr, sleep, food, weight, goal, upcoming, race, attention] =
           await Promise.all([
             getTodayMetricSum("step_count"),
             getTodayMetricSum("active_energy"),
@@ -349,7 +350,12 @@ const handler = createMcpHandler(
             getTodayFoodTotal(),
             getLatestWeight(),
             getGoal(),
+            listTrainingSessions({ from: today, status: "planned" }),
+            findRace(today),
+            getAttention(today),
           ]);
+        // Listed newest first; the next session is the earliest one.
+        const nextSession = upcoming.at(-1) ?? null;
 
         const caloriesOut = kjToKcal(activeKj + basalKj);
         const caloriesIn = food.calories;
@@ -373,6 +379,12 @@ const handler = createMcpHandler(
           weightKg,
           targetWeightKg: targetWeight,
           goalProgressPct: progress != null ? Math.round(progress * 100) : null,
+          nextSession: nextSession ? presentSession(nextSession) : null,
+          race:
+            race && race.raceDate >= today
+              ? { name: race.name, raceDate: race.raceDate, daysToGo: daysBetween(today, race.raceDate) }
+              : null,
+          needsAttention: { top: attention.items.slice(0, 2), total: attention.items.length },
         });
       }
     );
