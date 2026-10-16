@@ -95,8 +95,11 @@ async function resolveLoggedAt(date?: string): Promise<{ iso: string } | { error
   if (/Z$|[+-]\d{2}:?\d{2}$/.test(date)) {
     return { iso: new Date(date).toISOString() };
   }
+  // Cast through text: a parameter Postgres infers as `timestamp` is serialized
+  // by postgres.js via new Date(), which reads a zoneless string in the host's
+  // zone and shifts it before TIME_ZONE is applied.
   const [row] = await sql`
-    select ${date}::timestamp at time zone ${TIME_ZONE} as logged_at
+    select ${date}::text::timestamp at time zone ${TIME_ZONE} as logged_at
   `;
   return { iso: row.logged_at.toISOString() };
 }
