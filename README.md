@@ -4,6 +4,8 @@ A personal health, body-composition, and strength tracker. It ingests Apple
 Health data exported by the [Health Auto Export](https://www.healthyapps.dev/)
 app, lets you manually log weight and body composition, food (with macros), and
 strength sets, and shows trends against a weight-loss or muscle-building goal.
+Over MCP it also runs triathlon preparation: swim/bike/run sessions, gear and
+its maintenance, fuel stock, spending, and races with their checklists.
 
 ## Features
 
@@ -28,7 +30,10 @@ metric, generic name/unit/qty/min/avg/max + raw JSON payload), `workouts`,
 `strength_sessions` and `strength_sets`, `routines`/`routine_days`/
 `routine_exercises` holding the plan those sessions are measured against, and a
 single-row `goals` table (weight targets + training phase + calorie/protein
-targets).
+targets). Endurance training and race prep add `training_sessions` with ordered
+`training_segments`, `equipment`, `consumables`/`stock_events`, maintenance
+rules and service logs, `expenses`, and `races` with their gear, tasks, and
+fueling plan (see below).
 
 **Units**: lift weights are entered and displayed in pounds but stored in
 kilograms (`strength_sets.weight_kg`), the same unit as `weight_logs` and Apple
@@ -138,7 +143,8 @@ Tools: `get_today_summary`, `get_trends`, `get_goal_status`, `list_workouts`,
 `get_progressive_overload_status`, `get_macro_summary`, `get_routine`,
 `list_exercises` (read); `log_weight` (weight + body composition), `log_food`
 (with macros), `log_workout`, `log_set`, `set_routine_target`, `set_goal`,
-`delete_weight_log`, `delete_food_log`, `delete_set` (write).
+`delete_weight_log`, `delete_food_log`, `delete_set` (write). Endurance training
+and race prep tools are listed in the next section.
 
 For logging tools, omitted `date` means now. A `YYYY-MM-DD` value means midnight
 on that calendar day in `America/Los_Angeles`; an ISO datetime without an offset
@@ -160,6 +166,43 @@ claude mcp add --transport http health-maxxing http://localhost:3000/api/mcp \
 
 Check the connection with `/mcp` inside a session.
 
+### Endurance training and race prep
+
+MCP-only for now; there are no dashboard pages for it yet.
+
+| Area | Tools |
+|---|---|
+| Sessions | `log_training_session`, `update_training_session`, `delete_training_session`, `list_training_sessions` |
+| Gear | `set_equipment`, `list_equipment` |
+| Maintenance | `set_maintenance_rule`, `delete_maintenance_rule`, `log_service`, `delete_service_log`, `get_maintenance_status` |
+| Fuel | `set_consumable`, `adjust_stock`, `list_consumables` |
+| Money | `log_expense`, `update_expense`, `delete_expense`, `list_expenses`, `get_budget_summary` |
+| Races | `set_race`, `get_race_status`, `set_race_gear`, `remove_race_gear`, `set_race_task`, `remove_race_task`, `set_race_fuel` |
+| Across all | `get_needs_attention`, `dismiss_attention`, `restore_deleted` |
+
+The rule throughout is that totals and states are derived from source records,
+never stored, so an edit, a retried call, or a delete cannot double count:
+
+- A session is a date and a status (planned or completed); its ordered
+  segments carry sport, duration, and distance, so a brick is a session with
+  more than one leg. Gear links per leg, so the bike accrues only the bike leg.
+- Gear usage, fuel stock, maintenance state, and race-gear readiness are all
+  computed on read from completed, undeleted sessions. Planned fuel is need,
+  never a deduction.
+- Swims, rides, and runs from Apple Health become completed sessions on ingest
+  and attach to a same-day, same-sport session that has no workout yet, so an
+  effort told to Claude and synced from the watch counts once.
+- Expenses keep the amount and currency charged. USD totals use a rate declared
+  on the expense (`usd_per_unit`); without one an expense is reported as
+  unconverted, never converted at a guessed rate. Paying for gear whose status
+  is "needed" marks it owned; fuel bought with an expense counts once it is paid.
+- Race gear is missing, acquired, tested (used in a completed session), or
+  ready (explicitly confirmed) - owning an item never makes it ready.
+- Sessions, service logs, and expenses are soft-deleted and come back with
+  `restore_deleted`.
+
+Distances are stored and shown in km (swims also in metres), money in USD.
+
 ### Claude.ai custom connector (OAuth)
 
 Claude.ai's custom connectors don't accept a raw bearer token - they require an
@@ -179,6 +222,17 @@ access secret to authorize. `MCP_SECRET` plays both roles: the raw bearer for
 Claude Code (above) and the owner password for this browser flow. The server
 must be reachable over public HTTPS (all OAuth redirect URIs must be HTTPS, so a
 `localhost` tunnel that terminates TLS, or a real deployment, is required).
+
+## Tests
+
+```bash
+npm test
+```
+
+`pretest` builds the app and prepares a sibling database named after the one in
+`DATABASE_URL` with a `_test` suffix (created on first run, schema applied every
+run). The suites serve the built app against that database, so they never write
+to the dev database.
 
 ## Current status
 
