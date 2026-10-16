@@ -120,6 +120,21 @@ export async function updateExpense(
       select id, currency, usd_per_unit from expenses where id = ${id} and deleted_at is null for update
     `;
     if (!current) return null;
+    // A booking's cost must stay in its race's budget (see setRaceTask), so the
+    // task's link has to go before the expense can leave that race.
+    if (patch.raceId !== undefined) {
+      const [holder] = await tx`
+        select t.title, r.name as race
+        from race_tasks t join races r on r.id = t.race_id
+        where t.expense_id = ${id} and t.race_id is distinct from ${patch.raceId}
+        limit 1
+      `;
+      if (holder) {
+        return {
+          error: `Expense ${id} pays for "${holder.title}" on ${holder.race}; unlink it there first (set_race_task expense_id: null).`,
+        };
+      }
+    }
     const currency = patch.currency ?? (current.currency as string);
     // A rate belongs to a currency: switching currency without a new rate drops
     // the old one rather than applying it to the wrong money.

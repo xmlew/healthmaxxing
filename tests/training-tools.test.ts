@@ -964,3 +964,16 @@ test("sessions stay editable after their gear is retired", async () => {
   });
   assert.match(refused, /Not in hand/, "new sessions still refuse retired gear");
 });
+
+test("a booking's expense cannot be moved off its race", async () => {
+  const race = `${TAG}booking race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(dayKeyInZone(new Date()), 95) });
+  const { expense } = await callTool<{ expense: { id: number } }>("log_expense", {
+    description: `${TAG}course hotel`,
+    amount: 200,
+    category: "travel",
+  });
+  await callTool("set_race_task", { race, title: "Hotel", expense_id: expense.id });
+  const detach = await callToolError("update_expense", { id: expense.id, race: null });
+  assert.match(detach, /Hotel/, "detaching names the task holding it");
+});
