@@ -2,7 +2,7 @@ import { sql } from "./db";
 import { listExpenses, summarizeBudget } from "./expenses";
 import { listConsumables } from "./fuel";
 import { listMaintenance } from "./maintenance";
-import { listRaceGear, listRaces, listRaceTasks, raceBudget } from "./races";
+import { listRaceGear, listRaces, listRaceTasks, raceBudget, type Race } from "./races";
 import { daysBetween } from "./time";
 
 // Untested gear only matters once the race is close enough that there are few
@@ -80,59 +80,61 @@ async function fuelItems(today: string): Promise<AttentionItem[]> {
 }
 
 async function raceItems(today: string): Promise<AttentionItem[]> {
-  const items: AttentionItem[] = [];
   const upcoming = (await listRaces()).filter((r) => r.raceDate >= today);
-  for (const race of upcoming) {
-    const daysToGo = daysBetween(today, race.raceDate);
-    const [gear, tasks, budget] = await Promise.all([
-      listRaceGear(race.id),
-      listRaceTasks(race.id, today),
-      raceBudget(race),
-    ]);
-    for (const g of gear) {
-      if (g.state === "missing") {
-        items.push({
-          key: `gear:${race.id}:${g.label.toLowerCase()}:missing`,
-          severity: daysToGo <= MISSING_GEAR_BLOCKER_DAYS ? "blocker" : "warning",
-          area: "race gear",
-          reason: `${race.name} (${daysToGo} days): ${g.label} is missing - ${g.evidence}.`,
-          nextAction: g.equipment
-            ? `Get ${g.equipment} and log the purchase with log_expense.`
-            : `Assign an item with set_race_gear (add it with set_equipment first).`,
-        });
-      } else if (g.state === "acquired" && daysToGo <= UNTESTED_GEAR_WINDOW_DAYS) {
-        items.push({
-          key: `gear:${race.id}:${g.label.toLowerCase()}:untested`,
-          severity: "warning",
-          area: "race gear",
-          reason: `${race.name} (${daysToGo} days): ${g.label} (${g.equipment}) has never been used in a logged session.`,
-          nextAction: `Use it in training and log it on that session.`,
-        });
-      }
-    }
-    for (const t of tasks) {
-      if (t.state === "overdue" || t.state === "due_soon") {
-        items.push({
-          key: `task:${t.id}:${t.state}`,
-          severity: t.state === "overdue" ? "blocker" : "warning",
-          area: "race task",
-          reason:
-            t.state === "overdue"
-              ? `${race.name}: "${t.title}" was due ${t.dueOn} (${-(t.daysUntilDue ?? 0)} days ago).`
-              : `${race.name}: "${t.title}" is due ${t.dueOn} (in ${t.daysUntilDue} days).`,
-          nextAction: `Do it, then mark it with set_race_task done: true.`,
-        });
-      }
-    }
-    if (budget.remainingAfterCommittedUsd != null && budget.remainingAfterCommittedUsd < 0) {
+  return (await Promise.all(upcoming.map((race) => itemsForRace(race, today)))).flat();
+}
+
+async function itemsForRace(race: Race, today: string): Promise<AttentionItem[]> {
+  const items: AttentionItem[] = [];
+  const daysToGo = daysBetween(today, race.raceDate);
+  const [gear, tasks, budget] = await Promise.all([
+    listRaceGear(race.id),
+    listRaceTasks(race.id, today),
+    raceBudget(race),
+  ]);
+  for (const g of gear) {
+    if (g.state === "missing") {
       items.push({
-        key: `budget-over:${race.id}:${Math.round(-budget.remainingAfterCommittedUsd)}`,
+        key: `gear:${race.id}:${g.label.toLowerCase()}:missing`,
+        severity: daysToGo <= MISSING_GEAR_BLOCKER_DAYS ? "blocker" : "warning",
+        area: "race gear",
+        reason: `${race.name} (${daysToGo} days): ${g.label} is missing - ${g.evidence}.`,
+        nextAction: g.equipment
+          ? `Get ${g.equipment} and log the purchase with log_expense.`
+          : `Assign an item with set_race_gear (add it with set_equipment first).`,
+      });
+    } else if (g.state === "acquired" && daysToGo <= UNTESTED_GEAR_WINDOW_DAYS) {
+      items.push({
+        key: `gear:${race.id}:${g.label.toLowerCase()}:untested`,
         severity: "warning",
-        area: "budget",
-        reason: `${race.name}: paid and committed spend is $${-budget.remainingAfterCommittedUsd} over the $${budget.budgetUsd} budget.`,
-        nextAction: "Raise the budget with set_race or drop planned expenses.",
+        area: "race gear",
+        reason: `${race.name} (${daysToGo} days): ${g.label} (${g.equipment}) has never been used in a logged session.`,
+        nextAction: `Use it in training and log it on that session.`,
       });
     }
+  }
+  for (const t of tasks) {
+    if (t.state === "overdue" || t.state === "due_soon") {
+      items.push({
+        key: `task:${t.id}:${t.state}`,
+        severity: t.state === "overdue" ? "blocker" : "warning",
+        area: "race task",
+        reason:
+          t.state === "overdue"
+            ? `${race.name}: "${t.title}" was due ${t.dueOn} (${-(t.daysUntilDue ?? 0)} days ago).`
+            : `${race.name}: "${t.title}" is due ${t.dueOn} (in ${t.daysUntilDue} days).`,
+        nextAction: `Do it, then mark it with set_race_task done: true.`,
+      });
+    }
+  }
+  if (budget.remainingAfterCommittedUsd != null && budget.remainingAfterCommittedUsd < 0) {
+    items.push({
+      key: `budget-over:${race.id}:${Math.round(-budget.remainingAfterCommittedUsd)}`,
+      severity: "warning",
+      area: "budget",
+      reason: `${race.name}: paid and committed spend is $${-budget.remainingAfterCommittedUsd} over the $${budget.budgetUsd} budget.`,
+      nextAction: "Raise the budget with set_race or drop planned expenses.",
+    });
   }
   return items;
 }
