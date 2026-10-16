@@ -65,6 +65,17 @@ import {
   type Consumable,
 } from "@/lib/fuel";
 import {
+  deleteMaintenanceRule,
+  findEquipmentId,
+  findRuleId,
+  listMaintenance,
+  listServiceLogs,
+  logService,
+  setMaintenanceRule,
+  setServiceLogDeleted,
+  type MaintenanceRule,
+} from "@/lib/maintenance";
+import {
   createTrainingSession,
   getTrainingSession,
   listTrainingSessions,
@@ -248,6 +259,14 @@ async function fuelStockFor(...sessions: TrainingSession[]) {
     const { name, onHand, plannedNeed, shortfall, servingUnit } = presentConsumable(item);
     return { name, onHand, plannedNeed, shortfall, servingUnit };
   });
+}
+
+function presentRule(rule: MaintenanceRule) {
+  return {
+    ...rule,
+    kmSince: round2(rule.kmSince),
+    hoursSince: Math.round(rule.hoursSince * 10) / 10,
+  };
 }
 
 async function equipmentUsageFor(...sessions: TrainingSession[]) {
@@ -1328,13 +1347,17 @@ const handler = createMcpHandler(
       {
         title: "Restore something deleted",
         description:
-          "Bring back a record from the recycle bin by `kind` and `id`; it counts again everywhere it did before. training_session: from delete_training_session (find ids with list_training_sessions include_deleted=true).",
+          "Bring back a record from the recycle bin by `kind` and `id`; it counts again everywhere it did before. training_session: from delete_training_session (find ids with list_training_sessions include_deleted=true). service_log: from delete_service_log.",
         inputSchema: {
-          kind: z.enum(["training_session"]),
+          kind: z.enum(["training_session", "service_log"]),
           id: z.number().int().positive(),
         },
       },
-      async ({ id }) => {
+      async ({ kind, id }) => {
+        if (kind === "service_log") {
+          const restored = await setServiceLogDeleted(id, false);
+          return restored ? ok({ ok: true, restoredId: id }) : fail(`No deleted service log with id ${id}.`);
+        }
         const restored = await setTrainingSessionDeleted(id, false);
         if (!restored) return fail(`No deleted training session with id ${id}.`);
         return ok({ ok: true, session: presentSession((await getTrainingSession(id))!) });
@@ -1494,6 +1517,126 @@ const handler = createMcpHandler(
       async () => {
         const items = await listConsumables(dayKeyInZone(new Date()));
         return ok({ consumables: items.map(presentConsumable) });
+      }
+    );
+
+    server.registerTool(
+      "set_maintenance_rule",
+      {
+        title: "Add or update a maintenance rule",
+        description:
+          "Say how often a gear item should be checked or serviced, by `name` per item (e.g. 'chain check' on the bike): every_days, every_km, and/or every_hours of use - whichever comes first. Usage counts completed sessions the item was used on after the last logged service (log_service), or after `starts_on` (default today) until the first one. Updating keeps fields left out; null clears an interval, but at least one must remain. Intervals are yours to set - due means inspection is due, not that the item is unsafe.",
+        inputSchema: {
+          equipment: z.string().min(1),
+          name: z.string().min(1),
+          every_days: z.number().int().positive().nullable().optional(),
+          every_km: z.number().finite().positive().nullable().optional(),
+          every_hours: z.number().finite().positive().nullable().optional(),
+          starts_on: z.string().date().optional(),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ equipment, name, every_days, every_km, every_hours, starts_on, notes }) => {
+        const equipmentId = await findEquipmentId(equipment);
+        if (equipmentId == null) return fail(`No equipment named "${equipment}" (see list_equipment).`);
+        const result = await setMaintenanceRule(equipmentId, name, {
+          intervalDays: every_days,
+          intervalKm: every_km,
+          intervalHours: every_hours,
+          startsOn: starts_on,
+          notes,
+        });
+        if ("error" in result) return fail(result.error);
+        const rule = (await listMaintenance(dayKeyInZone(new Date()), { equipmentId })).find(
+          (r) => r.id === result.id,
+        );
+        return ok({ ok: true, created: result.created, rule: rule ? presentRule(rule) : null });
+      }
+    );
+
+    server.registerTool(
+      "delete_maintenance_rule",
+      {
+        title: "Delete a maintenance rule",
+        description: "Stop tracking a maintenance rule. Services already logged against it are kept.",
+        inputSchema: { equipment: z.string().min(1), name: z.string().min(1) },
+      },
+      async ({ equipment, name }) => {
+        const equipmentId = await findEquipmentId(equipment);
+        if (equipmentId == null) return fail(`No equipment named "${equipment}".`);
+        const ruleId = await findRuleId(equipmentId, name);
+        if (ruleId == null) return fail(`No rule "${name}" on ${equipment}.`);
+        await deleteMaintenanceRule(ruleId);
+        return ok({ ok: true, deleted: { equipment, rule: name } });
+      }
+    );
+
+    server.registerTool(
+      "log_service",
+      {
+        title: "Log a service or check",
+        description:
+          "Record that a gear item was serviced or checked on `date` (YYYY-MM-DD, default today). Name the `rule` it satisfies to restart that rule's interval; leave it out for a one-off service. Returns the item's maintenance status afterwards. A service's cost belongs in an expense.",
+        inputSchema: {
+          equipment: z.string().min(1),
+          rule: z.string().min(1).optional(),
+          date: z.string().date().optional(),
+          notes: z.string().optional(),
+        },
+      },
+      async ({ equipment, rule, date, notes }) => {
+        const equipmentId = await findEquipmentId(equipment);
+        if (equipmentId == null) return fail(`No equipment named "${equipment}" (see list_equipment).`);
+        let ruleId: number | null = null;
+        if (rule) {
+          ruleId = await findRuleId(equipmentId, rule);
+          if (ruleId == null) return fail(`No rule "${rule}" on ${equipment} (see get_maintenance_status).`);
+        }
+        const today = dayKeyInZone(new Date());
+        const id = await logService({ equipmentId, ruleId, performedOn: date ?? today, notes: notes ?? null });
+        const rules = await listMaintenance(today, { equipmentId });
+        return ok({ ok: true, serviceLogId: id, rules: rules.map(presentRule) });
+      }
+    );
+
+    server.registerTool(
+      "delete_service_log",
+      {
+        title: "Delete a service log",
+        description:
+          "Move a mis-logged service to the recycle bin by its id (from get_maintenance_status). Its rule's interval falls back to the previous service; restore_deleted brings it back.",
+        inputSchema: { id: z.number().int().positive() },
+      },
+      async ({ id }) => {
+        const removed = await setServiceLogDeleted(id, true);
+        return removed ? ok({ ok: true, deletedId: id }) : fail(`No active service log with id ${id}.`);
+      }
+    );
+
+    server.registerTool(
+      "get_maintenance_status",
+      {
+        title: "Maintenance status",
+        description:
+          "Every maintenance rule (or one item's, by `equipment`) with its state - ok, approaching (90% of an interval used), or due - and the reasons as used-of-interval for each measure, plus the date usage is counted from. `legsWithoutDistance` counts linked legs with no distance, so kmSince is a floor while it is above zero. Also lists recent services with their ids. Retired gear is skipped.",
+        inputSchema: { equipment: z.string().min(1).optional() },
+      },
+      async ({ equipment }) => {
+        let equipmentId: number | undefined;
+        if (equipment) {
+          const id = await findEquipmentId(equipment);
+          if (id == null) return fail(`No equipment named "${equipment}".`);
+          equipmentId = id;
+        }
+        const [rules, services] = await Promise.all([
+          listMaintenance(dayKeyInZone(new Date()), { equipmentId }),
+          listServiceLogs({ equipmentId, limit: 20 }),
+        ]);
+        return ok({
+          due: rules.filter((r) => r.state === "due").map((r) => `${r.equipment}: ${r.name}`),
+          rules: rules.map(presentRule),
+          recentServices: services,
+        });
       }
     );
   },

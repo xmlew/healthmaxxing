@@ -364,6 +364,50 @@ create table if not exists training_session_fuel (
 create index if not exists training_session_fuel_consumable_idx
   on training_session_fuel (consumable_id);
 
+-- Maintenance: a rule says how often an item should be checked - by elapsed
+-- days, distance, or ride/run time, whichever comes first - and a service log
+-- records that it was done. Due status is computed from the latest service
+-- against the rule (or the rule's start date) and the usage since, never
+-- stored, so logging a service or editing a session re-evaluates it. A rule
+-- means "inspection due", not that the item is unsafe.
+create table if not exists maintenance_rules (
+  id bigserial primary key,
+  equipment_id bigint not null references equipment (id) on delete cascade,
+  name text not null,
+  interval_days integer,
+  interval_km double precision,
+  interval_hours double precision,
+  -- Usage is counted from here until the first service is logged.
+  starts_on date not null default current_date,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint maintenance_rules_interval_check
+    check (coalesce(interval_days, interval_km, interval_hours) is not null),
+  constraint maintenance_rules_positive_check check (
+    (interval_days is null or interval_days > 0)
+    and (interval_km is null or interval_km > 0)
+    and (interval_hours is null or interval_hours > 0)
+  )
+);
+
+create unique index if not exists maintenance_rules_equipment_name_key
+  on maintenance_rules (equipment_id, lower(name));
+
+create table if not exists service_logs (
+  id bigserial primary key,
+  equipment_id bigint not null references equipment (id) on delete cascade,
+  -- The rule this service satisfies; null for a one-off service. Deleting a rule
+  -- keeps the history.
+  rule_id bigint references maintenance_rules (id) on delete set null,
+  performed_on date not null,
+  notes text,
+  deleted_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists service_logs_equipment_idx on service_logs (equipment_id, performed_on desc);
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,

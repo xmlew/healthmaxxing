@@ -375,3 +375,71 @@ test("expired lots are flagged and fuel inputs are validated", async () => {
   assert.match(twice, /each product once/);
   assert.equal((await sessionsOn("2020-03-21", true)).length, 0, "refused calls wrote nothing");
 });
+
+type Rule = { equipment: string; name: string; state: string; kmSince: number; reasons: string[] };
+type MaintenanceStatus = { due: string[]; rules: Rule[]; recentServices: { id: number; rule: string | null }[] };
+
+test("a maintenance rule comes due from usage and a logged service resolves it", async () => {
+  const roadBike = `${TAG}road bike`;
+  await callTool("set_equipment", { name: roadBike, category: "bike" });
+  await callTool("set_maintenance_rule", {
+    equipment: roadBike,
+    name: "chain check",
+    every_km: 100,
+    starts_on: "2020-04-01",
+  });
+  const status = () => callTool<MaintenanceStatus>("get_maintenance_status", { equipment: roadBike });
+  const chain = async () => (await status()).rules.find((r) => r.name === "chain check")!;
+
+  await callTool("log_training_session", {
+    date: "2020-04-02",
+    segments: [{ sport: "bike", duration_min: 180, distance_km: 95, equipment: [roadBike] }],
+    notes: TAG,
+  });
+  assert.equal((await chain()).state, "approaching", "95 of 100 km");
+
+  const second = await callTool<LoggedSession>("log_training_session", {
+    date: "2020-04-03",
+    segments: [{ sport: "bike", duration_min: 30, distance_km: 10, equipment: [roadBike] }],
+    notes: TAG,
+  });
+  const due = await status();
+  assert.deepEqual(due.due, [`${roadBike}: chain check`], "exactly one actionable warning");
+  assert.deepEqual(due.rules[0].reasons, ["105 km of every 100 km"]);
+
+  await callTool("delete_training_session", { id: second.session.id });
+  assert.equal((await chain()).state, "approaching", "status follows edits to the training it counts");
+  await callTool("restore_deleted", { kind: "training_session", id: second.session.id });
+
+  await callTool("log_service", { equipment: roadBike, rule: "chain check", date: "2020-04-03" });
+  const serviced = await status();
+  assert.deepEqual(serviced.due, [], "the service resolves the warning");
+  assert.equal(serviced.rules[0].kmSince, 0, "a ride on the service day counts toward the old interval");
+
+  await callTool("delete_service_log", { id: serviced.recentServices[0].id });
+  assert.equal((await chain()).state, "due", "deleting the service brings the warning back");
+  await callTool("restore_deleted", { kind: "service_log", id: serviced.recentServices[0].id });
+  assert.equal((await chain()).state, "ok");
+});
+
+test("time-based rules come due by the calendar, and every rule needs an interval", async () => {
+  const helmet = `${TAG}helmet`;
+  await callTool("set_equipment", { name: helmet, category: "helmet" });
+  await callTool("set_maintenance_rule", {
+    equipment: helmet,
+    name: "strap inspection",
+    every_days: 30,
+    starts_on: "2020-01-01",
+  });
+  const { rules } = await callTool<MaintenanceStatus>("get_maintenance_status", { equipment: helmet });
+  assert.equal(rules[0].state, "due", "years past a 30-day interval");
+
+  const none = await callToolError("set_maintenance_rule", { equipment: helmet, name: "visor" });
+  assert.match(none, /at least one/);
+  const cleared = await callToolError("set_maintenance_rule", {
+    equipment: helmet,
+    name: "strap inspection",
+    every_days: null,
+  });
+  assert.match(cleared, /at least one/, "clearing the only interval is refused");
+});
