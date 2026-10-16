@@ -1314,7 +1314,7 @@ const handler = createMcpHandler(
       {
         title: "Delete a training session",
         description:
-          "Move a session to the recycle bin by `id`. It stops counting toward equipment usage and returns its fuel to stock immediately, and can be brought back with restore_training_session.",
+          "Move a session to the recycle bin by `id`. It stops counting toward equipment usage and returns its fuel to stock immediately, and can be brought back with restore_deleted.",
         inputSchema: { id: z.number().int().positive() },
       },
       async ({ id }) => {
@@ -1324,12 +1324,15 @@ const handler = createMcpHandler(
     );
 
     server.registerTool(
-      "restore_training_session",
+      "restore_deleted",
       {
-        title: "Restore a deleted training session",
+        title: "Restore something deleted",
         description:
-          "Bring back a session deleted with delete_training_session (find its id with list_training_sessions include_deleted=true).",
-        inputSchema: { id: z.number().int().positive() },
+          "Bring back a record from the recycle bin by `kind` and `id`; it counts again everywhere it did before. training_session: from delete_training_session (find ids with list_training_sessions include_deleted=true).",
+        inputSchema: {
+          kind: z.enum(["training_session"]),
+          id: z.number().int().positive(),
+        },
       },
       async ({ id }) => {
         const restored = await setTrainingSessionDeleted(id, false);

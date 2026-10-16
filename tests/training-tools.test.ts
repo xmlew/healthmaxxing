@@ -136,7 +136,7 @@ test("a completed ride adds exactly its distance to the bike, and edits replace 
   assert.equal((await sessionsOn("2020-03-01")).length, 0, "a deleted session is hidden by default");
   assert.equal((await sessionsOn("2020-03-01", true)).length, 1, "but kept in the recycle bin");
 
-  await callTool("restore_training_session", { id: logged.session.id });
+  await callTool("restore_deleted", { kind: "training_session", id: logged.session.id });
   assert.equal((await usageOf(BIKE)).distanceKm, before.distanceKm + 50, "a restored ride counts again");
 });
 
@@ -327,7 +327,7 @@ test("fuel used on a session draws down stock exactly once, through edits and de
 
   await callTool("delete_training_session", { id: logged.session.id });
   assert.equal((await stockOf(GEL)).onHand, 6, "a deleted session gives its fuel back");
-  await callTool("restore_training_session", { id: logged.session.id });
+  await callTool("restore_deleted", { kind: "training_session", id: logged.session.id });
   assert.equal((await stockOf(GEL)).onHand, 5);
 });
 
