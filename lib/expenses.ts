@@ -31,6 +31,7 @@ export type Expense = {
   // Null when the currency is not USD and no rate was declared.
   amountUsd: number | null;
   equipment: string | null;
+  race: string | null;
   stock: { product: string; servings: number; expiresOn: string | null }[];
   notes: string | null;
   deletedAt: string | null;
@@ -65,16 +66,19 @@ export async function createExpense(input: {
   currency: string;
   usdPerUnit: number | null;
   equipmentId: number | null;
+  raceId: number | null;
   stock: StockLotInput[];
   notes: string | null;
 }): Promise<{ id: number; acquired: boolean }> {
   return sql.begin(async (tx) => {
     const [row] = await tx`
       insert into expenses
-        (description, category, status, expense_date, amount, currency, usd_per_unit, equipment_id, notes)
+        (description, category, status, expense_date, amount, currency, usd_per_unit,
+         equipment_id, race_id, notes)
       values (
         ${input.description}, ${input.category}, ${input.status}, ${input.date}::date,
-        ${input.amount}, ${input.currency}, ${input.usdPerUnit}, ${input.equipmentId}, ${input.notes}
+        ${input.amount}, ${input.currency}, ${input.usdPerUnit}, ${input.equipmentId},
+        ${input.raceId}, ${input.notes}
       )
       returning id
     `;
@@ -107,6 +111,7 @@ export async function updateExpense(
     amount?: number;
     currency?: string;
     usdPerUnit?: number | null;
+    raceId?: number | null;
     notes?: string | null;
   },
 ): Promise<{ acquired: boolean } | { error: string } | null> {
@@ -138,6 +143,7 @@ export async function updateExpense(
         amount = ${keep(patch.amount, "amount")},
         currency = ${currency},
         usd_per_unit = ${usdPerUnit},
+        race_id = ${keep(patch.raceId, "race_id")},
         notes = ${keep(patch.notes, "notes")},
         updated_at = now()
       where id = ${id}
@@ -180,13 +186,15 @@ export async function listExpenses(filter: {
   to?: string;
   status?: ExpenseStatus;
   category?: ExpenseCategory;
+  raceId?: number;
   ids?: number[];
   includeDeleted?: boolean;
 }): Promise<Expense[]> {
   const rows = await sql`
     select
       x.id, x.description, x.category, x.status, to_char(x.expense_date, 'YYYY-MM-DD') as date,
-      x.amount, x.currency, x.usd_per_unit, e.name as equipment, x.notes, x.deleted_at,
+      x.amount, x.currency, x.usd_per_unit, e.name as equipment, r.name as race, x.notes,
+      x.deleted_at,
       coalesce((
         select json_agg(json_build_object(
           'product', c.name, 'servings', se.servings,
@@ -197,11 +205,13 @@ export async function listExpenses(filter: {
       ), '[]') as stock
     from expenses x
     left join equipment e on e.id = x.equipment_id
+    left join races r on r.id = x.race_id
     where true
       ${filter.from ? sql`and x.expense_date >= ${filter.from}::date` : sql``}
       ${filter.to ? sql`and x.expense_date <= ${filter.to}::date` : sql``}
       ${filter.status ? sql`and x.status = ${filter.status}` : sql``}
       ${filter.category ? sql`and x.category = ${filter.category}` : sql``}
+      ${filter.raceId ? sql`and x.race_id = ${filter.raceId}` : sql``}
       ${filter.ids ? sql`and x.id = any(${filter.ids})` : sql``}
       ${filter.includeDeleted ? sql`` : sql`and x.deleted_at is null`}
     order by x.expense_date desc, x.id desc
@@ -220,6 +230,7 @@ export async function listExpenses(filter: {
       usdPerUnit,
       amountUsd: amountUsd(amount, r.currency as string, usdPerUnit),
       equipment: (r.equipment as string | null) ?? null,
+      race: (r.race as string | null) ?? null,
       stock: (r.stock as { product: string; servings: number; expiresOn: string | null }[]).map((l) => ({
         ...l,
         servings: Number(l.servings),

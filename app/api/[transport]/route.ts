@@ -104,7 +104,16 @@ import {
   setEquipment,
   type Equipment,
 } from "@/lib/equipment";
-import { dayKeyInZone, kjToKcal, shiftDayKey, TIME_ZONE } from "@/lib/time";
+import {
+  findRace,
+  listRaces,
+  raceBudget,
+  RACE_FORMATS,
+  setRace,
+  sportMilestones,
+  type Race,
+} from "@/lib/races";
+import { dayKeyInZone, daysBetween, kjToKcal, shiftDayKey, TIME_ZONE } from "@/lib/time";
 import { displayLb, displayVolumeLb, kgToLb, lbToKg } from "@/lib/units";
 
 const PAIRING_KEYS = PAIRINGS.map((p) => p.key) as [PairingKey, ...PairingKey[]];
@@ -277,6 +286,15 @@ function presentRule(rule: MaintenanceRule) {
     ...rule,
     kmSince: round2(rule.kmSince),
     hoursSince: Math.round(rule.hoursSince * 10) / 10,
+  };
+}
+
+function presentRace(race: Race) {
+  return {
+    ...race,
+    swimKm: race.swimKm != null ? round2(race.swimKm) : null,
+    bikeKm: race.bikeKm != null ? round2(race.bikeKm) : null,
+    runKm: race.runKm != null ? round2(race.runKm) : null,
   };
 }
 
@@ -1671,6 +1689,7 @@ const handler = createMcpHandler(
           status: z.enum(EXPENSE_STATUSES).default("paid"),
           date: z.string().date().optional().describe("Paid on, or expected on when planned. Defaults to today."),
           equipment: z.string().min(1).optional(),
+          race: z.string().min(1).optional().describe("Attribute the cost to a race (set_race), counting it against that race's budget."),
           stock: z
             .array(
               z.object({
@@ -1684,7 +1703,7 @@ const handler = createMcpHandler(
           notes: z.string().optional(),
         },
       },
-      async ({ description, amount, currency, usd_per_unit, category, status, date, equipment, stock, notes }) => {
+      async ({ description, amount, currency, usd_per_unit, category, status, date, equipment, race, stock, notes }) => {
         const code = currency.toUpperCase();
         if (code === BASE_CURRENCY && usd_per_unit !== undefined) {
           return fail(`A ${BASE_CURRENCY} expense takes no usd_per_unit.`);
@@ -1698,6 +1717,13 @@ const handler = createMcpHandler(
           equipmentId = await findEquipmentId(equipment);
           if (equipmentId == null) return fail(`No equipment named "${equipment}" (add it with set_equipment).`);
         }
+        const today = dayKeyInZone(new Date());
+        let raceId: number | null = null;
+        if (race) {
+          const found = await findRace(today, race);
+          if (!found) return fail(`No race named "${race}" (see get_race_status).`);
+          raceId = found.id;
+        }
         let lots: StockLotInput[] = [];
         if (stock) {
           const found = await findConsumableIds(stock.map((l) => l.product));
@@ -1709,7 +1735,6 @@ const handler = createMcpHandler(
           }));
         }
 
-        const today = dayKeyInZone(new Date());
         const created = await createExpense({
           description: description.trim(),
           category: resolvedCategory,
@@ -1719,6 +1744,7 @@ const handler = createMcpHandler(
           currency: code,
           usdPerUnit: usd_per_unit ?? null,
           equipmentId,
+          raceId,
           stock: lots,
           notes: notes ?? null,
         });
@@ -1745,7 +1771,7 @@ const handler = createMcpHandler(
       {
         title: "Edit an expense",
         description:
-          "Change an expense by `id` (from list_expenses) - most often marking a planned expense paid, or adding the `usd_per_unit` rate to an unconverted one. Fields left out are unchanged. Changing `currency` without a new rate clears the old rate. Marking paid an expense for a 'needed' item marks that item owned (or rented). What an expense is linked to cannot be changed; delete it and log a new one.",
+          "Change an expense by `id` (from list_expenses) - most often marking a planned expense paid, or adding the `usd_per_unit` rate to an unconverted one. Fields left out are unchanged. Changing `currency` without a new rate clears the old rate. Marking paid an expense for a 'needed' item marks that item owned (or rented). `race` re-attributes it (null detaches it). The equipment or stock it bought cannot be changed; delete it and log a new one.",
         inputSchema: {
           id: z.number().int().positive(),
           description: z.string().min(1).optional(),
@@ -1755,10 +1781,17 @@ const handler = createMcpHandler(
           amount: z.number().finite().positive().optional(),
           currency: z.string().regex(/^[A-Za-z]{3}$/).optional(),
           usd_per_unit: z.number().finite().positive().nullable().optional(),
+          race: z.string().min(1).nullable().optional(),
           notes: z.string().nullable().optional(),
         },
       },
-      async ({ id, description, category, status, date, amount, currency, usd_per_unit, notes }) => {
+      async ({ id, description, category, status, date, amount, currency, usd_per_unit, race, notes }) => {
+        let raceId: number | null | undefined = race === null ? null : undefined;
+        if (race) {
+          const found = await findRace(dayKeyInZone(new Date()), race);
+          if (!found) return fail(`No race named "${race}" (see get_race_status).`);
+          raceId = found.id;
+        }
         const result = await updateExpense(id, {
           description,
           category,
@@ -1767,6 +1800,7 @@ const handler = createMcpHandler(
           amount,
           currency: currency?.toUpperCase(),
           usdPerUnit: usd_per_unit,
+          raceId,
           notes,
         });
         if (result == null) return fail(`No expense with id ${id}.`);
@@ -1819,6 +1853,79 @@ const handler = createMcpHandler(
         },
       },
       async ({ from, to }) => ok({ currency: BASE_CURRENCY, from, to, ...summarizeBudget(await listExpenses({ from, to })) }),
+    );
+
+    server.registerTool(
+      "set_race",
+      {
+        title: "Add or update a race",
+        description:
+          "Create or update a race by `name` (case-insensitive): date, location, course distances in km, goal, budget in USD, notes. `format: \"70.3\"` fills any distance not given with the nominal 1.2 mi / 56 mi / 13.1 mi (1.93 / 90.12 / 21.08 km); give the course's actual distances when they differ. A new race needs `race_date`. Fields left out keep their value; null clears an optional one. The next upcoming race is the default wherever a race is not named.",
+        inputSchema: {
+          name: z.string().min(1),
+          race_date: z.string().date().optional(),
+          format: z.enum(Object.keys(RACE_FORMATS) as [keyof typeof RACE_FORMATS]).optional(),
+          location: z.string().nullable().optional(),
+          swim_km: z.number().finite().positive().nullable().optional(),
+          bike_km: z.number().finite().positive().nullable().optional(),
+          run_km: z.number().finite().positive().nullable().optional(),
+          goal: z.string().nullable().optional(),
+          budget_usd: z.number().finite().nonnegative().nullable().optional(),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ name, race_date, format, location, swim_km, bike_km, run_km, goal, budget_usd, notes }) => {
+        const nominal = format ? RACE_FORMATS[format] : undefined;
+        const result = await setRace(name.trim(), {
+          raceDate: race_date,
+          location,
+          swimKm: swim_km !== undefined ? swim_km : nominal?.swimKm,
+          bikeKm: bike_km !== undefined ? bike_km : nominal?.bikeKm,
+          runKm: run_km !== undefined ? run_km : nominal?.runKm,
+          goal,
+          budgetUsd: budget_usd,
+          notes,
+        });
+        if ("error" in result) return fail(result.error);
+        return ok({ ok: true, created: result.created, race: presentRace(result.race) });
+      }
+    );
+
+    server.registerTool(
+      "get_race_status",
+      {
+        title: "Race status",
+        description:
+          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
+        inputSchema: { race: z.string().min(1).optional() },
+      },
+      async ({ race: name }) => {
+        const today = dayKeyInZone(new Date());
+        const race = await findRace(today, name);
+        if (!race) {
+          return name
+            ? fail(`No race named "${name}".`)
+            : ok({ race: null, message: "No race set yet. Add one with set_race." });
+        }
+        const [milestones, budget, races] = await Promise.all([
+          sportMilestones(race, today),
+          raceBudget(race),
+          listRaces(),
+        ]);
+        return ok({
+          race: presentRace(race),
+          daysToGo: daysBetween(today, race.raceDate),
+          milestones: milestones.map((m) => ({
+            ...m,
+            raceKm: m.raceKm != null ? round2(m.raceKm) : null,
+            longestRecentKm: m.longestRecentKm != null ? round2(m.longestRecentKm) : null,
+            shareOfRace: m.shareOfRace != null ? Math.round(m.shareOfRace * 100) / 100 : null,
+            weeklyHoursRecent: Math.round(m.weeklyHoursRecent * 10) / 10,
+          })),
+          budget,
+          races: races.map((r) => ({ name: r.name, raceDate: r.raceDate })),
+        });
+      }
     );
   },
   {},

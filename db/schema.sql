@@ -447,6 +447,31 @@ create index if not exists expenses_date_idx on expenses (expense_date desc);
 -- mistaken for gels on the shelf.
 alter table stock_events add column if not exists expense_id bigint references expenses (id);
 
+-- A race being prepared for. Several can coexist (an A race, a tune-up); the
+-- next upcoming one is the default everywhere a race is not named. Distances
+-- are per race because courses differ from the nominal format.
+create table if not exists races (
+  id bigserial primary key,
+  name text not null,
+  race_date date not null,
+  location text,
+  swim_km double precision,
+  bike_km double precision,
+  run_km double precision,
+  goal text,
+  budget_usd numeric(14, 2),
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint races_budget_check check (budget_usd is null or budget_usd >= 0)
+);
+
+create unique index if not exists races_name_lower_key on races (lower(name));
+
+-- Spend attributed to a race (entry, travel, race-specific gear); the race's
+-- budget is measured against exactly these.
+alter table expenses add column if not exists race_id bigint references races (id) on delete set null;
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,

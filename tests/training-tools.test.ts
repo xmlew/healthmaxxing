@@ -4,6 +4,7 @@ import postgres from "postgres";
 import { mcpClient } from "./support/mcp";
 import { startTestServer, type TestServer } from "./support/server";
 import { selectTestDatabase } from "./support/test-db";
+import { dayKeyInZone, shiftDayKey } from "../lib/time";
 
 selectTestDatabase();
 
@@ -55,6 +56,7 @@ async function removeTestRows(): Promise<void> {
     `;
     await sql`delete from consumables where name like ${`${TAG}%`}`;
     await sql`delete from expenses where description like ${`${TAG}%`}`;
+    await sql`delete from races where name like ${`${TAG}%`}`;
     await sql`delete from equipment where name like ${`${TAG}%`}`;
     await sql`delete from workouts where id like ${`${TAG}%`}`;
   } finally {
@@ -554,4 +556,68 @@ test("totals are exact to the cent", async () => {
     await callTool("log_expense", { description: `${TAG}cents`, amount, category: "other", date: "2020-05-05" });
   }
   assert.equal((await budgetOn("2020-05-05")).paidUsd, 0.3);
+});
+
+test("a race reports days to go, recent milestones, and its own budget", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}santa cruz`;
+  const created = await callTool<{ race: { swimKm: number; bikeKm: number; runKm: number } }>("set_race", {
+    name: race,
+    race_date: shiftDayKey(today, 100),
+    format: "70.3",
+    location: "Santa Cruz, CA",
+    budget_usd: 1000,
+  });
+  assert.deepEqual(
+    [created.race.swimKm, created.race.bikeKm, created.race.runKm],
+    [1.93, 90.12, 21.08],
+    "nominal 1.2 / 56 / 13.1 mi",
+  );
+  await callTool("set_race", { name: `${TAG}tune-up`, race_date: shiftDayKey(today, 160), format: "70.3" });
+  await callTool("set_race", { name: `${TAG}last season`, race_date: shiftDayKey(today, -300), format: "70.3" });
+
+  const log = (daysAgo: number, segments: unknown[]) =>
+    callTool("log_training_session", { date: shiftDayKey(today, -daysAgo), segments, notes: TAG });
+  await log(3, [{ sport: "bike", duration_min: 120, distance_km: 60 }]);
+  await log(10, [
+    { sport: "bike", duration_min: 150, distance_km: 70 },
+    { sport: "run", duration_min: 30, distance_km: 6 },
+  ]);
+  await log(5, [{ sport: "run", duration_min: 75, distance_km: 15 }]);
+  await log(100, [{ sport: "swim", duration_min: 45, distance_m: 2000 }]);
+
+  for (const description of ["entry", "hotel", "unrelated"]) {
+    await callTool("log_expense", {
+      description: `${TAG}${description}`,
+      amount: description === "entry" ? 400 : 300,
+      category: description === "unrelated" ? "other" : description === "entry" ? "registration" : "travel",
+      status: description === "hotel" ? "planned" : "paid",
+      ...(description === "unrelated" ? {} : { race }),
+    });
+  }
+
+  type Milestone = { sport: string; longestRecentKm: number | null; shareOfRace: number | null; weeklyHoursRecent: number };
+  const status = await callTool<{
+    race: { name: string };
+    daysToGo: number;
+    milestones: Milestone[];
+    budget: { paidUsd: number; plannedUsd: number; remainingAfterPaidUsd: number; remainingAfterCommittedUsd: number };
+  }>("get_race_status");
+  assert.equal(status.race.name, race, "the next upcoming race is the default");
+  assert.equal(status.daysToGo, 100);
+
+  const bySport = Object.fromEntries(status.milestones.map((m) => [m.sport, m]));
+  assert.equal(bySport.bike.longestRecentKm, 70, "a brick's bike leg counts as a ride");
+  assert.equal(bySport.bike.shareOfRace, 0.78);
+  assert.equal(bySport.bike.weeklyHoursRecent, 1.1, "270 min over 4 weeks");
+  assert.equal(bySport.run.longestRecentKm, 15);
+  assert.equal(bySport.swim.longestRecentKm, null, "a swim 100 days ago is outside the 12-week window");
+
+  assert.deepEqual(
+    [status.budget.paidUsd, status.budget.plannedUsd],
+    [400, 300],
+    "only expenses attributed to the race count",
+  );
+  assert.equal(status.budget.remainingAfterPaidUsd, 600);
+  assert.equal(status.budget.remainingAfterCommittedUsd, 300);
 });
