@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import type { Db } from "./db";
 import type { Sport } from "./sports";
 import { insertSegments } from "./training-segments";
 import { TIME_ZONE } from "./time";
@@ -95,7 +96,7 @@ type ImportedWorkout = {
 // synced from the watch counts once. A planned session is completed with the
 // measured values; a session already logged as completed keeps what was entered,
 // because asserted data outranks inferred data. Idempotent per workout.
-async function linkImportedWorkout(sql: Sql, workout: ImportedWorkout): Promise<void> {
+async function linkImportedWorkout(sql: Db, workout: ImportedWorkout): Promise<void> {
   const [alreadyLinked] = await sql`
     select 1 from training_sessions where workout_id = ${workout.workoutId}
   `;
@@ -255,18 +256,23 @@ export async function ingestWorkouts(sql: Sql, workouts: WorkoutRecord[]): Promi
       `;
     }
 
+    // A workout with no positive duration was aborted; it stays a workout only.
     const sport = sportForWorkout(workout.name);
-    if (sport && workout.start) {
+    if (sport && workout.start && durationSeconds != null && durationSeconds > 0) {
       const [row] = await sql`
         select (${workout.start}::timestamptz at time zone ${TIME_ZONE})::date::text as day
       `;
-      await linkImportedWorkout(sql, {
-        workoutId: id,
-        sessionDate: row.day,
-        sport,
-        durationMin: durationSeconds != null ? durationSeconds / 60 : null,
-        distanceKm: distanceKm(workout.distance),
-      });
+      // One transaction, so a failure cannot leave a session without its leg -
+      // and an already-linked workout is never revisited to repair one.
+      await sql.begin((tx) =>
+        linkImportedWorkout(tx, {
+          workoutId: id,
+          sessionDate: row.day,
+          sport,
+          durationMin: durationSeconds / 60,
+          distanceKm: distanceKm(workout.distance),
+        }),
+      );
     }
 
     count++;

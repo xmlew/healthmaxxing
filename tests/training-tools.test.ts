@@ -916,3 +916,12 @@ test("PRD demo: one ride, one purchase, and every view updates without copying a
   assert.deepEqual(summary.race && [summary.race.name, summary.race.daysToGo], [race, 7]);
   assert.ok(summary.needsAttention.top.length <= 2 && summary.needsAttention.total >= 2);
 });
+
+test("an aborted Apple Health workout neither breaks the import nor leaves a hollow session", async () => {
+  await ingest([
+    { id: `${TAG}aborted`, name: "Outdoor Run", start: "2020-08-01 07:00:00 -0700", duration: 0 },
+    { id: `${TAG}after`, name: "Outdoor Cycling", start: "2020-08-01 09:00:00 -0700", duration: 1800, distance: { qty: 15, units: "km" } },
+  ]);
+  const day = await sessionsOn("2020-08-01");
+  assert.deepEqual(day.map((s) => s.kind), ["bike"], "the rest of the payload still lands");
+});
