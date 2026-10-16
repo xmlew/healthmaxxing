@@ -106,7 +106,10 @@ import {
 } from "@/lib/equipment";
 import {
   findRace,
+  listRaceGear,
   listRaces,
+  removeRaceGear,
+  setRaceGear,
   raceBudget,
   RACE_FORMATS,
   setRace,
@@ -1896,7 +1899,7 @@ const handler = createMcpHandler(
       {
         title: "Race status",
         description:
-          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
+          "Where preparation for a race stands (default: the next upcoming race): days to go, course distances, the gear checklist with each requirement's state (missing / acquired / tested / ready) and the evidence it rests on, and per sport the longest completed leg in the last 12 weeks against the race distance plus average weekly hours over the last 4 weeks - informational, not a readiness score. Budget compares the race's budget with the expenses attributed to it: paid, planned (committed), and what is left after each; expenses without a USD rate are listed as unconverted. Also lists every race.",
         inputSchema: { race: z.string().min(1).optional() },
       },
       async ({ race: name }) => {
@@ -1907,10 +1910,11 @@ const handler = createMcpHandler(
             ? fail(`No race named "${name}".`)
             : ok({ race: null, message: "No race set yet. Add one with set_race." });
         }
-        const [milestones, budget, races] = await Promise.all([
+        const [milestones, budget, races, gear] = await Promise.all([
           sportMilestones(race, today),
           raceBudget(race),
           listRaces(),
+          listRaceGear(race.id),
         ]);
         return ok({
           race: presentRace(race),
@@ -1922,9 +1926,68 @@ const handler = createMcpHandler(
             shareOfRace: m.shareOfRace != null ? Math.round(m.shareOfRace * 100) / 100 : null,
             weeklyHoursRecent: Math.round(m.weeklyHoursRecent * 10) / 10,
           })),
+          gear,
           budget,
           races: races.map((r) => ({ name: r.name, raceDate: r.raceDate })),
         });
+      }
+    );
+
+    server.registerTool(
+      "set_race_gear",
+      {
+        title: "Set a race gear requirement",
+        description:
+          "Add or update an item a race needs, by `label` (e.g. wetsuit, race belt), and point it at the inventory item that fills it (`equipment` by name; null unassigns). Its state is derived, never set: missing (nothing assigned, or the item is not in hand), acquired (in hand), tested (used in a completed session - log it on one), ready (you confirmed it for race day with `ready: true`; false withdraws that). Owning an item never makes it ready by itself. Assigning a different item clears an earlier confirmation. Race defaults to the next upcoming one.",
+        inputSchema: {
+          label: z.string().min(1),
+          race: z.string().min(1).optional(),
+          equipment: z.string().min(1).nullable().optional(),
+          ready: z.boolean().optional(),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ label, race: raceName, equipment, ready, notes }) => {
+        const today = dayKeyInZone(new Date());
+        const race = await findRace(today, raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        let equipmentId: number | null | undefined = equipment === null ? null : undefined;
+        if (equipment) {
+          const id = await findEquipmentId(equipment);
+          if (id == null) return fail(`No equipment named "${equipment}" (add it with set_equipment, status needed if not bought yet).`);
+          equipmentId = id;
+        }
+        const refused = await setRaceGear(race.id, label.trim(), {
+          equipmentId,
+          readyOn: ready === undefined ? undefined : ready ? today : null,
+          notes,
+        });
+        if (refused) return fail(refused.error);
+        const gear = await listRaceGear(race.id);
+        const item = gear.find((g) => g.label.toLowerCase() === label.trim().toLowerCase())!;
+        return ok({
+          ok: true,
+          race: race.name,
+          requirement: item,
+          ...(item.state === "ready" && item.evidence.includes("never used")
+            ? { warning: `Confirmed ready but ${item.equipment} has never been used in a logged session.` }
+            : {}),
+        });
+      }
+    );
+
+    server.registerTool(
+      "remove_race_gear",
+      {
+        title: "Remove a race gear requirement",
+        description: "Drop a requirement from a race's gear checklist by `label`. The inventory item is untouched.",
+        inputSchema: { label: z.string().min(1), race: z.string().min(1).optional() },
+      },
+      async ({ label, race: raceName }) => {
+        const race = await findRace(dayKeyInZone(new Date()), raceName);
+        if (!race) return fail(raceName ? `No race named "${raceName}".` : "No race set yet (set_race).");
+        const removed = await removeRaceGear(race.id, label.trim());
+        return removed ? ok({ ok: true, race: race.name, removed: label }) : fail(`No "${label}" on ${race.name}.`);
       }
     );
   },

@@ -472,6 +472,24 @@ create unique index if not exists races_name_lower_key on races (lower(name));
 -- budget is measured against exactly these.
 alter table expenses add column if not exists race_id bigint references races (id) on delete set null;
 
+-- What a race needs on the day, each pointing at the inventory item that will
+-- fill it. Its state is derived from evidence - missing, acquired (in hand),
+-- tested (used in a completed session), ready (confirmed for this race) - and
+-- owning an item never makes it ready on its own. Only the confirmation is
+-- stored, because it is the one fact no record can imply.
+create table if not exists race_gear (
+  id bigserial primary key,
+  race_id bigint not null references races (id) on delete cascade,
+  label text not null,
+  equipment_id bigint references equipment (id) on delete set null,
+  ready_on date,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists race_gear_race_label_key on race_gear (race_id, lower(label));
+
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both
 -- the resource server (/api/mcp) and its own authorization server. Secrets, codes,

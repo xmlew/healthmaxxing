@@ -179,3 +179,117 @@ export async function raceBudget(race: Race): Promise<RaceBudget> {
     remainingAfterCommittedUsd: budgetCents == null ? null : (budgetCents - paidCents - plannedCents) / 100,
   };
 }
+
+export const GEAR_STATES = ["missing", "acquired", "tested", "ready"] as const;
+export type GearState = (typeof GEAR_STATES)[number];
+
+const IN_HAND = ["owned", "rented", "borrowed"];
+
+export type RaceGearItem = {
+  label: string;
+  equipment: string | null;
+  equipmentStatus: string | null;
+  state: GearState;
+  // What the state rests on, so it can be checked rather than trusted.
+  evidence: string;
+  readyOn: string | null;
+  notes: string | null;
+};
+
+export async function listRaceGear(raceId: number): Promise<RaceGearItem[]> {
+  const rows = await sql`
+    select
+      g.label, g.notes, to_char(g.ready_on, 'YYYY-MM-DD') as ready_on,
+      e.name as equipment, e.status as equipment_status,
+      count(distinct ts.id) as sessions,
+      to_char(max(ts.session_date), 'YYYY-MM-DD') as last_used
+    from race_gear g
+    left join equipment e on e.id = g.equipment_id
+    left join training_segment_equipment tse on tse.equipment_id = e.id
+    left join training_segments seg on seg.id = tse.segment_id
+    left join training_sessions ts
+      on ts.id = seg.session_id and ts.status = 'completed' and ts.deleted_at is null
+    where g.race_id = ${raceId}
+    group by g.id, e.id
+    order by g.label
+  `;
+  return rows.map((r) => {
+    const equipment = (r.equipment as string | null) ?? null;
+    const status = (r.equipment_status as string | null) ?? null;
+    const sessions = Number(r.sessions);
+    const readyOn = (r.ready_on as string | null) ?? null;
+    const inHand = status != null && IN_HAND.includes(status);
+    const usage = sessions > 0 ? `used in ${sessions} completed session(s), last ${r.last_used}` : "never used in a logged session";
+
+    let state: GearState;
+    let evidence: string;
+    if (!equipment) {
+      state = "missing";
+      evidence = "no inventory item assigned";
+    } else if (!inHand) {
+      state = "missing";
+      evidence = `${equipment} is ${status}`;
+    } else if (readyOn) {
+      state = "ready";
+      evidence = `confirmed ready on ${readyOn}; ${usage}`;
+    } else if (sessions > 0) {
+      state = "tested";
+      evidence = usage;
+    } else {
+      state = "acquired";
+      evidence = `${equipment} is ${status}; ${usage}`;
+    }
+    return { label: r.label as string, equipment, equipmentStatus: status, state, evidence, readyOn, notes: (r.notes as string | null) ?? null };
+  });
+}
+
+// Upserts a requirement by label. Pointing it at a different item clears any
+// readiness confirmation, which was about the item it replaced, and an item
+// can only be confirmed ready while it is in hand.
+export async function setRaceGear(
+  raceId: number,
+  label: string,
+  patch: { equipmentId?: number | null; readyOn?: string | null; notes?: string | null },
+): Promise<{ error: string } | null> {
+  return sql.begin(async (tx) => {
+    const [existing] = await tx`
+      select id, equipment_id from race_gear where race_id = ${raceId} and lower(label) = lower(${label})
+    `;
+    const currentEquipmentId = existing?.equipment_id == null ? null : Number(existing.equipment_id);
+    const equipmentId = patch.equipmentId !== undefined ? patch.equipmentId : currentEquipmentId;
+
+    if (patch.readyOn) {
+      const [item] = equipmentId == null ? [] : await tx`select name, status from equipment where id = ${equipmentId}`;
+      if (!item) return { error: `Cannot confirm "${label}" ready: no inventory item assigned.` };
+      if (!IN_HAND.includes(item.status as string)) {
+        return { error: `Cannot confirm "${label}" ready: ${item.name} is ${item.status}.` };
+      }
+    }
+
+    if (!existing) {
+      await tx`
+        insert into race_gear (race_id, label, equipment_id, ready_on, notes)
+        values (${raceId}, ${label}, ${equipmentId}, ${patch.readyOn ?? null}::date, ${patch.notes ?? null})
+      `;
+      return null;
+    }
+    const readyOn =
+      patch.readyOn !== undefined ? patch.readyOn : equipmentId !== currentEquipmentId ? null : undefined;
+    await tx`
+      update race_gear set
+        equipment_id = ${equipmentId},
+        ready_on = ${readyOn === undefined ? tx`ready_on` : tx`${readyOn}::date`},
+        notes = ${patch.notes === undefined ? tx`notes` : patch.notes},
+        updated_at = now()
+      where id = ${existing.id}
+    `;
+    return null;
+  });
+}
+
+export async function removeRaceGear(raceId: number, label: string): Promise<boolean> {
+  const rows = await sql`
+    delete from race_gear where race_id = ${raceId} and lower(label) = lower(${label}) returning id
+  `;
+  return rows.length > 0;
+}

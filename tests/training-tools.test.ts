@@ -621,3 +621,55 @@ test("a race reports days to go, recent milestones, and its own budget", async (
   assert.equal(status.budget.remainingAfterPaidUsd, 600);
   assert.equal(status.budget.remainingAfterCommittedUsd, 300);
 });
+
+type GearItem = { label: string; state: string; evidence: string };
+
+test("a race checklist shows missing, acquired, tested, and ready gear from one inventory", async () => {
+  const today = dayKeyInZone(new Date());
+  const race = `${TAG}gear race`;
+  await callTool("set_race", { name: race, race_date: shiftDayKey(today, 400) });
+  const suit = `${TAG}open water wetsuit`;
+  const belt = `${TAG}race belt`;
+  await callTool("set_equipment", { name: suit, category: "wetsuit", status: "needed" });
+  await callTool("set_equipment", { name: belt, category: "apparel" });
+
+  const gear = async () => {
+    const status = await callTool<{ gear: GearItem[] }>("get_race_status", { race });
+    return Object.fromEntries(status.gear.map((g) => [g.label, g]));
+  };
+  await callTool("set_race_gear", { race, label: "wetsuit", equipment: suit });
+  await callTool("set_race_gear", { race, label: "race belt", equipment: belt });
+  await callTool("set_race_gear", { race, label: "helmet" });
+
+  let state = await gear();
+  assert.equal(state.wetsuit.state, "missing", "a needed item is missing");
+  assert.equal(state.helmet.state, "missing");
+  assert.match(state.helmet.evidence, /no inventory item/);
+  assert.equal(state["race belt"].state, "acquired", "owned but never used");
+
+  const refused = await callToolError("set_race_gear", { race, label: "wetsuit", ready: true });
+  assert.match(refused, /is needed/, "a missing item cannot be confirmed ready");
+
+  await callTool("log_expense", { description: `${TAG}wetsuit buy`, amount: 200, equipment: suit, race });
+  assert.equal((await gear()).wetsuit.state, "acquired", "buying it is acquisition, not readiness");
+
+  await callTool("log_training_session", {
+    date: "2020-06-01",
+    segments: [{ sport: "swim", duration_min: 40, distance_m: 1800, equipment: [suit] }],
+    notes: TAG,
+  });
+  state = await gear();
+  assert.equal(state.wetsuit.state, "tested");
+  assert.match(state.wetsuit.evidence, /used in 1 completed session/);
+
+  await callTool("set_race_gear", { race, label: "wetsuit", ready: true });
+  assert.equal((await gear()).wetsuit.state, "ready");
+
+  const unused = await callTool<{ warning?: string }>("set_race_gear", { race, label: "race belt", ready: true });
+  assert.match(unused.warning ?? "", /never been used/, "confirming untested gear is allowed but called out");
+
+  const spare = `${TAG}spare wetsuit`;
+  await callTool("set_equipment", { name: spare, category: "wetsuit" });
+  await callTool("set_race_gear", { race, label: "wetsuit", equipment: spare });
+  assert.equal((await gear()).wetsuit.state, "acquired", "a different item needs its own confirmation");
+});
