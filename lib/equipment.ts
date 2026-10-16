@@ -3,9 +3,10 @@ import { sql, valueOrKeep } from "./db";
 export const EQUIPMENT_STATUSES = ["needed", "owned", "rented", "borrowed", "retired"] as const;
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 
-// Statuses under which an item is in hand and can be used in a session. A
-// "needed" item does not exist yet; a retired one is kept for its history.
-const USABLE_STATUSES: EquipmentStatus[] = ["owned", "rented", "borrowed"];
+// Statuses under which an item is in hand: it can be used in a session and can
+// fill a race requirement. A "needed" item does not exist yet; a retired one is
+// kept for its history.
+export const IN_HAND_STATUSES: readonly EquipmentStatus[] = ["owned", "rented", "borrowed"];
 
 export type EquipmentUsage = {
   sessions: number;
@@ -143,7 +144,7 @@ export async function resolveUsableEquipment(
     };
   }
   const notInHand = rows.filter(
-    (r) => !USABLE_STATUSES.includes(r.status as EquipmentStatus) && !alreadyLinked.has(Number(r.id)),
+    (r) => !IN_HAND_STATUSES.includes(r.status as EquipmentStatus) && !alreadyLinked.has(Number(r.id)),
   );
   if (notInHand.length > 0) {
     return {

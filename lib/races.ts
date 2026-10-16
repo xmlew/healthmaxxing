@@ -1,4 +1,5 @@
 import { sql, valueOrKeep } from "./db";
+import { IN_HAND_STATUSES, type EquipmentStatus } from "./equipment";
 import { listExpenses, summarizeBudget, type BudgetSummary } from "./expenses";
 import { SPORTS, type Sport } from "./sports";
 import { daysBetween, shiftDayKey } from "./time";
@@ -189,8 +190,6 @@ export async function raceBudget(race: Race): Promise<RaceBudget> {
 export const GEAR_STATES = ["missing", "acquired", "tested", "ready"] as const;
 export type GearState = (typeof GEAR_STATES)[number];
 
-const IN_HAND = ["owned", "rented", "borrowed"];
-
 export type RaceGearItem = {
   label: string;
   equipment: string | null;
@@ -224,7 +223,7 @@ export async function listRaceGear(raceId: number): Promise<RaceGearItem[]> {
     const status = (r.equipment_status as string | null) ?? null;
     const sessions = Number(r.sessions);
     const readyOn = (r.ready_on as string | null) ?? null;
-    const inHand = status != null && IN_HAND.includes(status);
+    const inHand = status != null && IN_HAND_STATUSES.includes(status as EquipmentStatus);
     const usage = sessions > 0 ? `used in ${sessions} completed session(s), last ${r.last_used}` : "never used in a logged session";
 
     let state: GearState;
@@ -267,7 +266,7 @@ export async function setRaceGear(
     if (patch.readyOn) {
       const [item] = equipmentId == null ? [] : await tx`select name, status from equipment where id = ${equipmentId}`;
       if (!item) return { error: `Cannot confirm "${label}" ready: no inventory item assigned.` };
-      if (!IN_HAND.includes(item.status as string)) {
+      if (!IN_HAND_STATUSES.includes(item.status as EquipmentStatus)) {
         return { error: `Cannot confirm "${label}" ready: ${item.name} is ${item.status}.` };
       }
     }
