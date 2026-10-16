@@ -336,8 +336,8 @@ create table if not exists consumables (
 
 create unique index if not exists consumables_name_lower_key on consumables (lower(name));
 
--- Changes to the count on hand: a starting count, a gift, a lost bag. A positive
--- event is a lot, with its expiry when known.
+-- Changes to the count on hand: a purchase, a starting count, a gift, a lost
+-- bag. A positive event is a lot, with its expiry when known.
 create table if not exists stock_events (
   id bigserial primary key,
   consumable_id bigint not null references consumables (id),
@@ -407,6 +407,45 @@ create table if not exists service_logs (
 );
 
 create index if not exists service_logs_equipment_idx on service_logs (equipment_id, performed_on desc);
+
+-- Money spent or committed on training and racing. Each expense keeps the
+-- amount and currency it was actually charged in; totals are in USD using the
+-- rate declared on the expense itself (usd_per_unit), and an expense in another
+-- currency with no declared rate stays visibly unconverted rather than guessed.
+-- A planned expense becomes paid in place, so a purchase is never forecast and
+-- counted as spent at the same time.
+create table if not exists expenses (
+  id bigserial primary key,
+  description text not null,
+  category text not null,
+  amount numeric(14, 2) not null,
+  currency text not null default 'USD',
+  usd_per_unit numeric(18, 8),
+  status text not null default 'paid',
+  expense_date date not null,
+  -- What the money bought, when it was a gear item; cost lives only here.
+  equipment_id bigint references equipment (id),
+  notes text,
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint expenses_category_check check (category in (
+    'equipment', 'consumables', 'maintenance', 'registration', 'travel', 'rentals', 'other'
+  )),
+  constraint expenses_status_check check (status in ('planned', 'paid')),
+  constraint expenses_amount_check check (amount > 0),
+  constraint expenses_currency_check check (currency ~ '^[A-Z]{3}$'),
+  constraint expenses_rate_check check (
+    usd_per_unit is null or (usd_per_unit > 0 and currency <> 'USD')
+  )
+);
+
+create index if not exists expenses_date_idx on expenses (expense_date desc);
+
+-- A stock lot bought with an expense is a purchase. It counts toward stock only
+-- while that expense is paid and not deleted, so a planned purchase is never
+-- mistaken for gels on the shelf.
+alter table stock_events add column if not exists expense_id bigint references expenses (id);
 
 -- OAuth 2.1 authorization server, backing the MCP endpoint's connector handshake
 -- (Claude.ai custom connectors require OAuth, not a raw bearer). This app is both

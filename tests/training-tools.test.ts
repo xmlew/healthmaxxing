@@ -49,12 +49,13 @@ async function removeTestRows(): Promise<void> {
       delete from training_sessions
       where notes like ${`${TAG}%`} or workout_id like ${`${TAG}%`}
     `;
-    await sql`delete from equipment where name like ${`${TAG}%`}`;
     await sql`
       delete from stock_events
       where consumable_id in (select id from consumables where name like ${`${TAG}%`})
     `;
     await sql`delete from consumables where name like ${`${TAG}%`}`;
+    await sql`delete from expenses where description like ${`${TAG}%`}`;
+    await sql`delete from equipment where name like ${`${TAG}%`}`;
     await sql`delete from workouts where id like ${`${TAG}%`}`;
   } finally {
     await sql.end();
@@ -442,4 +443,115 @@ test("time-based rules come due by the calendar, and every rule needs an interva
     every_days: null,
   });
   assert.match(cleared, /at least one/, "clearing the only interval is refused");
+});
+
+type Expense = { id: number; status: string; amount: number; currency: string; amountUsd: number | null };
+type Budget = {
+  paidUsd: number;
+  plannedUsd: number;
+  byCategory: Record<string, { paidUsd: number; plannedUsd: number }>;
+  unconverted: { currency: string; amount: number; expenseIds: number[] }[];
+};
+
+const budgetOn = (date: string) => callTool<Budget>("get_budget_summary", { from: date, to: date });
+
+test("buying needed gear posts one expense and puts it in hand, not race-ready", async () => {
+  const wetsuit = `${TAG}race wetsuit`;
+  await callTool("set_equipment", { name: wetsuit, category: "wetsuit", status: "needed" });
+
+  const bought = await callTool<{
+    expense: Expense;
+    acquired: boolean;
+    equipment: { status: string; acquiredOn: string };
+  }>("log_expense", { description: `${TAG}wetsuit`, amount: 200, equipment: wetsuit, date: "2020-05-01" });
+  assert.equal(bought.expense.amountUsd, 200);
+  assert.equal(bought.acquired, true);
+  assert.equal(bought.equipment.status, "owned", "acquired - and nothing more");
+  assert.equal(bought.equipment.acquiredOn, "2020-05-01");
+
+  const budget = await budgetOn("2020-05-01");
+  assert.equal(budget.paidUsd, 200, "the purchase counts once in actual spend");
+  assert.deepEqual(budget.byCategory, { equipment: { paidUsd: 200, plannedUsd: 0 } });
+
+  await callTool("delete_expense", { id: bought.expense.id });
+  assert.equal((await budgetOn("2020-05-01")).paidUsd, 0, "a deleted expense leaves the totals");
+  await callTool("restore_deleted", { kind: "expense", id: bought.expense.id });
+  assert.equal((await budgetOn("2020-05-01")).paidUsd, 200);
+});
+
+test("a planned expense moves to paid in place instead of counting twice", async () => {
+  const { expense } = await callTool<{ expense: Expense }>("log_expense", {
+    description: `${TAG}race entry`,
+    amount: 350,
+    category: "registration",
+    status: "planned",
+    date: "2020-05-02",
+  });
+  assert.deepEqual(
+    [(await budgetOn("2020-05-02")).paidUsd, (await budgetOn("2020-05-02")).plannedUsd],
+    [0, 350],
+  );
+  await callTool("update_expense", { id: expense.id, status: "paid" });
+  const after = await budgetOn("2020-05-02");
+  assert.deepEqual([after.paidUsd, after.plannedUsd], [350, 0]);
+});
+
+test("foreign-currency spend stays unconverted until a rate is declared", async () => {
+  const { expense } = await callTool<{ expense: Expense }>("log_expense", {
+    description: `${TAG}physio`,
+    amount: 100,
+    currency: "sgd",
+    category: "other",
+    date: "2020-05-03",
+  });
+  assert.equal(expense.currency, "SGD");
+  assert.equal(expense.amountUsd, null);
+  const unconverted = await budgetOn("2020-05-03");
+  assert.equal(unconverted.paidUsd, 0, "no guessed conversion");
+  assert.deepEqual(unconverted.unconverted, [
+    { currency: "SGD", status: "paid", amount: 100, expenseIds: [expense.id] },
+  ]);
+
+  const rated = await callTool<{ expense: Expense & { usdPerUnit: number } }>("update_expense", {
+    id: expense.id,
+    usd_per_unit: 0.74,
+  });
+  assert.equal(rated.expense.amount, 100, "the original amount is kept for audit");
+  assert.equal(rated.expense.amountUsd, 74);
+  const converted = await budgetOn("2020-05-03");
+  assert.equal(converted.paidUsd, 74);
+  assert.deepEqual(converted.unconverted, []);
+
+  const refused = await callToolError("log_expense", {
+    description: `${TAG}bad`,
+    amount: 5,
+    usd_per_unit: 1.2,
+    category: "other",
+  });
+  assert.match(refused, /takes no usd_per_unit/);
+});
+
+test("bought fuel is stock only once the purchase is paid", async () => {
+  const mix = `${TAG}drink mix`;
+  await callTool("set_consumable", { name: mix, kind: "drink mix", serving_unit: "scoop", carbs_g: 40 });
+
+  const { expense } = await callTool<{ expense: Expense }>("log_expense", {
+    description: `${TAG}drink mix tub`,
+    amount: 30,
+    status: "planned",
+    date: "2020-05-04",
+    stock: [{ product: mix, servings: 20, expires_on: "2099-01-01" }],
+  });
+  assert.equal((await stockOf(mix)).onHand, 0, "a planned purchase is not on the shelf");
+  await callTool("update_expense", { id: expense.id, status: "paid" });
+  assert.equal((await stockOf(mix)).onHand, 20);
+  await callTool("delete_expense", { id: expense.id });
+  assert.equal((await stockOf(mix)).onHand, 0, "deleting the purchase removes its stock");
+});
+
+test("totals are exact to the cent", async () => {
+  for (const amount of [0.1, 0.2]) {
+    await callTool("log_expense", { description: `${TAG}cents`, amount, category: "other", date: "2020-05-05" });
+  }
+  assert.equal((await budgetOn("2020-05-05")).paidUsd, 0.3);
 });

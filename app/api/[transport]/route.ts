@@ -65,6 +65,17 @@ import {
   type Consumable,
 } from "@/lib/fuel";
 import {
+  BASE_CURRENCY,
+  createExpense,
+  EXPENSE_CATEGORIES,
+  EXPENSE_STATUSES,
+  listExpenses,
+  setExpenseDeleted,
+  summarizeBudget,
+  updateExpense,
+  type StockLotInput,
+} from "@/lib/expenses";
+import {
   deleteMaintenanceRule,
   findEquipmentId,
   findRuleId,
@@ -1347,13 +1358,18 @@ const handler = createMcpHandler(
       {
         title: "Restore something deleted",
         description:
-          "Bring back a record from the recycle bin by `kind` and `id`; it counts again everywhere it did before. training_session: from delete_training_session (find ids with list_training_sessions include_deleted=true). service_log: from delete_service_log.",
+          "Bring back a record from the recycle bin by `kind` and `id`; it counts again everywhere it did before. training_session: from delete_training_session (find ids with list_training_sessions include_deleted=true). service_log: from delete_service_log. expense: from delete_expense (list_expenses include_deleted=true).",
         inputSchema: {
-          kind: z.enum(["training_session", "service_log"]),
+          kind: z.enum(["training_session", "service_log", "expense"]),
           id: z.number().int().positive(),
         },
       },
       async ({ kind, id }) => {
+        if (kind === "expense") {
+          const restored = await setExpenseDeleted(id, false);
+          if (!restored) return fail(`No deleted expense with id ${id}.`);
+          return ok({ ok: true, expense: (await listExpenses({ ids: [id] }))[0] });
+        }
         if (kind === "service_log") {
           const restored = await setServiceLogDeleted(id, false);
           return restored ? ok({ ok: true, restoredId: id }) : fail(`No deleted service log with id ${id}.`);
@@ -1638,6 +1654,171 @@ const handler = createMcpHandler(
           recentServices: services,
         });
       }
+    );
+
+    server.registerTool(
+      "log_expense",
+      {
+        title: "Log an expense",
+        description:
+          "Record money spent (status paid) or committed but not yet spent (planned): race entry, gear, fuel, servicing, travel, rentals. `amount` is in the `currency` actually charged (ISO code, default USD); for any other currency give `usd_per_unit` (USD per 1 unit, e.g. 0.74 for SGD) so it enters USD totals - without it the expense stays listed as unconverted, never guessed. Link what it bought: `equipment` by name (paying for an item whose status is 'needed' marks it owned, or rented for a rental; the item's cost lives only here), or `stock` lots of a consumable (added to stock while the expense is paid). Category defaults from the link (equipment or consumables). A planned expense becomes paid with update_expense, so it is never counted twice.",
+        inputSchema: {
+          description: z.string().min(1),
+          amount: z.number().finite().positive(),
+          currency: z.string().regex(/^[A-Za-z]{3}$/).default(BASE_CURRENCY),
+          usd_per_unit: z.number().finite().positive().optional(),
+          category: z.enum(EXPENSE_CATEGORIES).optional(),
+          status: z.enum(EXPENSE_STATUSES).default("paid"),
+          date: z.string().date().optional().describe("Paid on, or expected on when planned. Defaults to today."),
+          equipment: z.string().min(1).optional(),
+          stock: z
+            .array(
+              z.object({
+                product: z.string().min(1),
+                servings: z.number().finite().positive(),
+                expires_on: z.string().date().optional(),
+              }),
+            )
+            .min(1)
+            .optional(),
+          notes: z.string().optional(),
+        },
+      },
+      async ({ description, amount, currency, usd_per_unit, category, status, date, equipment, stock, notes }) => {
+        const code = currency.toUpperCase();
+        if (code === BASE_CURRENCY && usd_per_unit !== undefined) {
+          return fail(`A ${BASE_CURRENCY} expense takes no usd_per_unit.`);
+        }
+        if (equipment && stock) return fail("Link an expense to equipment or to stock, not both.");
+        const resolvedCategory = category ?? (equipment ? "equipment" : stock ? "consumables" : undefined);
+        if (!resolvedCategory) return fail(`Give a category: ${EXPENSE_CATEGORIES.join(", ")}.`);
+
+        let equipmentId: number | null = null;
+        if (equipment) {
+          equipmentId = await findEquipmentId(equipment);
+          if (equipmentId == null) return fail(`No equipment named "${equipment}" (add it with set_equipment).`);
+        }
+        let lots: StockLotInput[] = [];
+        if (stock) {
+          const found = await findConsumableIds(stock.map((l) => l.product));
+          if ("error" in found) return fail(found.error);
+          lots = stock.map((l) => ({
+            consumableId: found.ids.get(l.product.trim().toLowerCase())!,
+            servings: l.servings,
+            expiresOn: l.expires_on ?? null,
+          }));
+        }
+
+        const today = dayKeyInZone(new Date());
+        const created = await createExpense({
+          description: description.trim(),
+          category: resolvedCategory,
+          status,
+          date: date ?? today,
+          amount,
+          currency: code,
+          usdPerUnit: usd_per_unit ?? null,
+          equipmentId,
+          stock: lots,
+          notes: notes ?? null,
+        });
+        const [expense] = await listExpenses({ ids: [created.id] });
+        return ok({
+          ok: true,
+          expense,
+          ...(equipmentId != null
+            ? { equipment: presentEquipment((await listEquipment({ ids: [equipmentId] }))[0]), acquired: created.acquired }
+            : {}),
+          ...(lots.length > 0
+            ? {
+                stock: (await listConsumables(today, { ids: lots.map((l) => l.consumableId) })).map(
+                  presentConsumable,
+                ),
+              }
+            : {}),
+        });
+      }
+    );
+
+    server.registerTool(
+      "update_expense",
+      {
+        title: "Edit an expense",
+        description:
+          "Change an expense by `id` (from list_expenses) - most often marking a planned expense paid, or adding the `usd_per_unit` rate to an unconverted one. Fields left out are unchanged. Changing `currency` without a new rate clears the old rate. Marking paid an expense for a 'needed' item marks that item owned (or rented). What an expense is linked to cannot be changed; delete it and log a new one.",
+        inputSchema: {
+          id: z.number().int().positive(),
+          description: z.string().min(1).optional(),
+          category: z.enum(EXPENSE_CATEGORIES).optional(),
+          status: z.enum(EXPENSE_STATUSES).optional(),
+          date: z.string().date().optional(),
+          amount: z.number().finite().positive().optional(),
+          currency: z.string().regex(/^[A-Za-z]{3}$/).optional(),
+          usd_per_unit: z.number().finite().positive().nullable().optional(),
+          notes: z.string().nullable().optional(),
+        },
+      },
+      async ({ id, description, category, status, date, amount, currency, usd_per_unit, notes }) => {
+        const result = await updateExpense(id, {
+          description,
+          category,
+          status,
+          date,
+          amount,
+          currency: currency?.toUpperCase(),
+          usdPerUnit: usd_per_unit,
+          notes,
+        });
+        if (result == null) return fail(`No expense with id ${id}.`);
+        if ("error" in result) return fail(result.error);
+        return ok({ ok: true, acquired: result.acquired, expense: (await listExpenses({ ids: [id] }))[0] });
+      }
+    );
+
+    server.registerTool(
+      "delete_expense",
+      {
+        title: "Delete an expense",
+        description:
+          "Move an expense to the recycle bin by `id`. It leaves every total, and any stock it bought stops counting; restore_deleted brings it back. An item it marked owned keeps that status - you may still have it.",
+        inputSchema: { id: z.number().int().positive() },
+      },
+      async ({ id }) => {
+        const removed = await setExpenseDeleted(id, true);
+        return removed ? ok({ ok: true, deletedId: id }) : fail(`No active expense with id ${id}.`);
+      }
+    );
+
+    server.registerTool(
+      "list_expenses",
+      {
+        title: "List expenses",
+        description:
+          "Expenses newest first, optionally filtered by date range (YYYY-MM-DD), status, or category. Each shows the original amount and currency, the declared usd_per_unit, amountUsd (null when unconverted), and what it bought.",
+        inputSchema: {
+          from: z.string().date().optional(),
+          to: z.string().date().optional(),
+          status: z.enum(EXPENSE_STATUSES).optional(),
+          category: z.enum(EXPENSE_CATEGORIES).optional(),
+          include_deleted: z.boolean().default(false),
+        },
+      },
+      async ({ from, to, status, category, include_deleted }) =>
+        ok({ expenses: await listExpenses({ from, to, status, category, includeDeleted: include_deleted }) }),
+    );
+
+    server.registerTool(
+      "get_budget_summary",
+      {
+        title: "Budget summary",
+        description:
+          "Spending in USD over an optional date range: paid (actual) and planned (committed, not yet paid) in total and by category. Each expense counts once, as paid or as planned. Expenses in another currency without a declared rate are not converted; they are listed under `unconverted` in their own currency with their ids, so the totals are explicitly partial while that list is non-empty.",
+        inputSchema: {
+          from: z.string().date().optional(),
+          to: z.string().date().optional(),
+        },
+      },
+      async ({ from, to }) => ok({ currency: BASE_CURRENCY, from, to, ...summarizeBudget(await listExpenses({ from, to })) }),
     );
   },
   {},

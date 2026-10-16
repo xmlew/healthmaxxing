@@ -1,5 +1,6 @@
 import { sql } from "./db";
 import { expiryOf, type ExpiryStatus } from "./fuel-expiry";
+import type { Db } from "./training-segments";
 
 export type ConsumablePatch = {
   kind?: string;
@@ -65,18 +66,22 @@ export async function setConsumable(
   return { id: Number(existing.id), created: false };
 }
 
-export async function addStockEvent(input: {
-  consumableId: number;
-  servings: number;
-  occurredOn: string;
-  expiresOn: string | null;
-  note: string | null;
-}): Promise<number> {
-  const [row] = await sql`
-    insert into stock_events (consumable_id, servings, occurred_on, expires_on, note)
+export async function addStockEvent(
+  input: {
+    consumableId: number;
+    servings: number;
+    occurredOn: string;
+    expiresOn: string | null;
+    note: string | null;
+    expenseId?: number;
+  },
+  db: Db = sql,
+): Promise<number> {
+  const [row] = await db`
+    insert into stock_events (consumable_id, servings, occurred_on, expires_on, note, expense_id)
     values (
       ${input.consumableId}, ${input.servings}, ${input.occurredOn}::date,
-      ${input.expiresOn}::date, ${input.note}
+      ${input.expiresOn}::date, ${input.note}, ${input.expenseId ?? null}
     )
     returning id
   `;
@@ -102,6 +107,15 @@ export async function findConsumableIds(
   return { ids };
 }
 
+// A lot bought with an expense counts only while that expense is paid and not
+// deleted; lots entered as adjustments always count.
+const COUNTED_STOCK_EVENT = sql`
+  (se.expense_id is null or exists (
+    select 1 from expenses x
+    where x.id = se.expense_id and x.status = 'paid' and x.deleted_at is null
+  ))
+`;
+
 export async function listConsumables(
   today: string,
   filter: { ids?: number[] } = {},
@@ -109,7 +123,10 @@ export async function listConsumables(
   const rows = await sql`
     select
       c.*,
-      coalesce((select sum(se.servings) from stock_events se where se.consumable_id = c.id), 0) as stocked,
+      coalesce((
+        select sum(se.servings) from stock_events se
+        where se.consumable_id = c.id and ${COUNTED_STOCK_EVENT}
+      ), 0) as stocked,
       coalesce((
         select sum(f.servings)
         from training_session_fuel f
@@ -128,11 +145,11 @@ export async function listConsumables(
           'servings', se.servings, 'expiresOn', to_char(se.expires_on, 'YYYY-MM-DD')
         ))
         from stock_events se
-        where se.consumable_id = c.id and se.servings > 0
+        where se.consumable_id = c.id and se.servings > 0 and ${COUNTED_STOCK_EVENT}
       ), '[]') as lots,
       coalesce((
         select -sum(se.servings) from stock_events se
-        where se.consumable_id = c.id and se.servings < 0
+        where se.consumable_id = c.id and se.servings < 0 and ${COUNTED_STOCK_EVENT}
       ), 0) as removed
     from consumables c
     where true ${filter.ids ? sql`and c.id = any(${filter.ids})` : sql``}

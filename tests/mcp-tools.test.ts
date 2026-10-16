@@ -94,7 +94,7 @@ test("tools/list exposes the four new analysis tools", async () => {
   for (const expected of ["get_recovery", "get_tdee", "get_correlation", "get_anomalies"]) {
     assert.ok(names.includes(expected), `tools/list missing ${expected}; got ${names.join(", ")}`);
   }
-  assert.equal(tools.length, 40, "expected 40 tools total (25 prior + 5 training session + 2 equipment + 3 fuel + 5 maintenance tools)");
+  assert.equal(tools.length, 45, "expected 45 tools total (25 prior + 5 training session + 2 equipment + 3 fuel + 5 maintenance + 5 expense tools)");
 });
 
 test("get_macro_summary returns per-day macros and targets", async () => {
